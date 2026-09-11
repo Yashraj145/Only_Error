@@ -7,7 +7,26 @@ const api = (path, opts) => fetch(path, { headers: { 'Content-Type': 'applicatio
 });
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-const state = { screen: 'dashboard' };
+const state = { screen: null };
+// Keep live-event bursts to one request batch at a time, with one trailing refresh.
+const refreshJobs = new Map();
+function refreshOnce(key, load) {
+  const running = refreshJobs.get(key);
+  if (running) { running.again = true; return running.promise; }
+  const job = { again: false };
+  refreshJobs.set(key, job);
+  job.promise = (async () => {
+    do { job.again = false; await load(); } while (job.again && !document.hidden);
+  })().finally(() => refreshJobs.delete(key));
+  return job.promise;
+}
+const renderedHTML = new WeakMap();
+function updateHTML(selector, html) {
+  const element = $(selector);
+  if (renderedHTML.get(element) === html) return;
+  element.innerHTML = html;
+  renderedHTML.set(element, html);
+}
 const agencyNames = { AG1: 'National Disaster Response Force (NDRF)', AG2: 'State Disaster Response Force (SDRF)', AG3: 'Indian Red Cross Society (IRCS)' };
 const readableAgency = value => String(value ?? '').replace(/\bAG[123]\b/g, id => agencyNames[id]);
 const screens = {
@@ -40,7 +59,11 @@ let generatedPositions = {}; // store fake coords so they don't jump
 function initMap() {
   if (map || typeof L === 'undefined') return;
   try {
-    map = L.map('map-container').setView([20.5, 78.9], 5);
+    map = L.map('map-container', {
+      scrollWheelZoom: false,
+      dragging: !window.matchMedia('(pointer: coarse)').matches,
+      tap: false
+    }).setView([20.5, 78.9], 5);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: ' OpenStreetMap'
     }).addTo(map);
@@ -156,6 +179,8 @@ function updateMap(zones, allocations = []) {
 
 function show(screen) {
   if (!screens[screen]) return;
+  const alreadyVisible = state.screen === screen && $(`#screen-${screen}`).classList.contains('active');
+  if (alreadyVisible) return;
   state.screen = screen;
   $('#page-title').textContent = screens[screen][0];
   $('#page-description').textContent = screens[screen][1];
@@ -170,7 +195,7 @@ function show(screen) {
   if (screen === 'dashboard') {
     initMap();
     renderDashboard();
-    setTimeout(() => { if(map) map.invalidateSize(); }, 100);
+    requestAnimationFrame(() => { if (map && state.screen === 'dashboard') map.invalidateSize({ pan: false }); });
   }
   if (screen === 'report') setupVoiceDispatcher();
   if (screen === 'inventory') renderInventory();
@@ -191,35 +216,47 @@ const tierBadge = (tier) => `<span class="badge ${tier}">${tier}</span>`;
 document.querySelector('button.link[data-screen="audit"]').onclick = () => show('audit');
 
 let eventSource = null;
+let liveRefreshTimer = null;
 function connectSSE() {
   if (eventSource) eventSource.close();
   eventSource = new EventSource('/api/events');
   eventSource.addEventListener('update', (e) => {
     try {
       const event = JSON.parse(e.data);
-      if (state.screen === 'dashboard') renderDashboard();
       if (state.screen === 'simulation') appendSimLog(event);
-      if (state.screen === 'sitrep') renderSitrep();
+      if (!liveRefreshTimer && !document.hidden) {
+        liveRefreshTimer = setTimeout(() => {
+          liveRefreshTimer = null;
+          if (document.hidden) return;
+          if (state.screen === 'dashboard') renderDashboard().catch(reportError);
+          if (state.screen === 'sitrep') renderSitrep().catch(reportError);
+          if (state.screen === 'audit') renderAudit().catch(reportError);
+        }, 120);
+      }
     } catch(err) {
       console.error(err);
     }
   });
-  eventSource.onerror = () => {
-    setTimeout(connectSSE, 3000); // reconnect
-  };
+  // EventSource reconnects automatically; extra timers create duplicate connections.
 }
 connectSSE();
 
 let prevStats = {};
 
-async function renderDashboard() {
+function renderDashboard() { return refreshOnce('dashboard', loadDashboard); }
+let mapSnapshot = '';
+async function loadDashboard() {
   const [d, zones, proposals, flags, forecasts, agencies, allocations] = await Promise.all([
     api('/api/dashboard'), api('/api/zones'), api('/api/reallocations'), api('/api/duplicate-flags'),
     api('/api/forecasts').catch(() => ({})), api('/api/agencies').catch(() => []),
     api('/api/allocations').catch(() => [])
   ]);
 
-  updateMap(zones, allocations);
+  const nextMapSnapshot = JSON.stringify([zones, allocations, showCorridors]);
+  if (nextMapSnapshot !== mapSnapshot) {
+    updateMap(zones, allocations);
+    mapSnapshot = nextMapSnapshot;
+  }
 
   const btnCorridors = $('#btn-toggle-corridors');
   if (btnCorridors && !btnCorridors.__bound) {
@@ -240,28 +277,28 @@ async function renderDashboard() {
   };
 
   const pendingClaims = zones.reduce((n, z) => n + (z.claims ? z.claims.filter(c => c.status === 'pending').length : 0), 0);
-  $('#status-strip').innerHTML = [
+  updateHTML('#status-strip', [
     ['Active zones', d.active_zones, 'active_zones'],
     ['Critical zones', d.critical_zones, 'critical_zones'],
     ['Units allocated', d.resources_allocated, 'resources_allocated'],
     ['Reports to review', d.pending_reports, 'pending_reports'],
     ['Agency commitments', pendingClaims, 'pending_claims'],
-  ].map(([label, v, k]) => `<div class="stat"><b>${Number(v).toLocaleString('en-IN')} ${getArrow(k, v)}</b><span>${label}</span></div>`).join('');
+  ].map(([label, v, k]) => `<div class="stat"><b>${Number(v).toLocaleString('en-IN')} ${getArrow(k, v)}</b><span>${label}</span></div>`).join(''));
   
   prevStats = { active_zones: d.active_zones, critical_zones: d.critical_zones, resources_allocated: d.resources_allocated, pending_reports: d.pending_reports, pending_claims: pendingClaims };
 
   const urgent = zones.filter(z => z.tier === 'critical' && z.unclaimed_categories && z.unclaimed_categories.length);
   if ($('#critical-needs')) {
-    $('#critical-needs').innerHTML = urgent.length ? `<div class="banner"><b>Critical needs awaiting an agency</b>${urgent.map(z => `<div>${esc(z.name)}: ${z.unclaimed_categories.join(', ')} <button class="link" onclick="openZone('${z.zone_id}')">Coordinate response →</button></div>`).join('')}</div>` : '<p class="dim">No unclaimed critical needs. Continue monitoring incoming reports.</p>';
+    updateHTML('#critical-needs', urgent.length ? `<div class="banner"><b>Critical needs awaiting an agency</b>${urgent.map(z => `<div>${esc(z.name)}: ${z.unclaimed_categories.join(', ')} <button class="link" onclick="openZone('${z.zone_id}')">Coordinate response →</button></div>`).join('')}</div>` : '<p class="dim">No unclaimed critical needs. Continue monitoring incoming reports.</p>');
   }
 
   if (forecasts && forecasts.alerts && forecasts.alerts.length > 0) {
-    $('#forecast-alerts').innerHTML = forecasts.alerts.map(a => `<div class="banner"> <b>ALERT</b> — ${esc(a)}</div>`).join('');
+    updateHTML('#forecast-alerts', forecasts.alerts.map(a => `<div class="banner"> <b>ALERT</b> — ${esc(a)}</div>`).join(''));
   } else {
-    $('#forecast-alerts').innerHTML = '';
+    updateHTML('#forecast-alerts', '');
   }
 
-  $('#dup-banner').innerHTML = flags.map((f) => `
+  updateHTML('#dup-banner', flags.map((f) => `
     <div class="banner">
       <b>Possible duplicate report</b> — "${esc(f.incoming.name)}" vs ${esc(f.matched_zone_name)}
       <span class="dim">(match score ${f.score} ≥ 3: ${Object.entries(f.components).filter(([, v]) => v > 0).map(([k]) => k).join(', ') || '—'})</span>
@@ -269,9 +306,9 @@ async function renderDashboard() {
         <button onclick="resolveFlag('${f.flag_id}','merge')">Merge into ${esc(f.matched_zone_name)}</button>
         <button class="secondary" onclick="resolveFlag('${f.flag_id}','dismiss')">Keep as new report</button>
       </div>
-    </div>`).join('');
+    </div>`).join(''));
 
-  $('#proposal-card').innerHTML = proposals.map((p) => `
+  updateHTML('#proposal-card', proposals.map((p) => `
     <div class="banner proposal">
       <b>Re-allocation proposal</b> — Divert ${p.quantity} ${esc(p.category)} units ${esc(p.from_zone_name)} → ${esc(p.to_zone_name)}?
       <div class="dim">${esc(p.reason_text)}</div>
@@ -279,19 +316,19 @@ async function renderDashboard() {
         <button onclick="decideProposal('${p.allocation_id}','accept')">Accept</button>
         <button class="secondary" onclick="decideProposal('${p.allocation_id}','dismiss')">Dismiss</button>
       </div>
-    </div>`).join('');
+    </div>`).join(''));
 
-  $('#zone-list').innerHTML = zones.map((z) => `
+  updateHTML('#zone-list', zones.map((z) => `
     <div class="card t-${z.tier}">
       <h3>${esc(z.name)} ${tierBadge(z.tier)}</h3>
       <div class="dim">Score ${z.severity_score} · pop ${z.population_affected} · needs: ${z.needs.join(', ') || '—'}${z.override_applied ? ' ·  rescue override' : ''}</div>
       <div class="dim">Gaps: ${Object.entries(z.gaps).filter(([, g]) => g > 0).map(([c, g]) => `${c}: ${g}`).join(' · ') || 'none'}</div>
       ${z.tier === 'critical' && z.unclaimed_categories.length ? `<div class="row critical">Awaiting agency: ${z.unclaimed_categories.join(', ')}</div>` : ''}
       <div class="row"><button onclick="openZone('${z.zone_id}')">View needs & coordinate</button></div>
-    </div>`).join('') || '<p class="dim">No zones.</p>';
+    </div>`).join('') || '<p class="dim">No zones.</p>');
 
   if ($('#agency-coordination')) {
-    $('#agency-coordination').innerHTML = (agencies || []).map(ag => `
+    updateHTML('#agency-coordination', (agencies || []).map(ag => `
       <div class="card" >
         <div class="agency-heading">
           <b>${esc(ag.name)}</b>
@@ -305,10 +342,10 @@ async function renderDashboard() {
         </div>
         ${ag.duplicate_attempts_blocked > 0 ? `<div style=" margin-top:6px;"> <b>${ag.duplicate_attempts_blocked}</b> conflict(s) blocked by ledger</div>` : `<div class="dim" style=" margin-top:6px;"> 0 conflicts (clean coordination)</div>`}
       </div>
-    `).join('') || '<p class="dim">No active agencies.</p>';
+    `).join('') || '<p class="dim">No active agencies.</p>');
   }
 
-  $('#inventory-summary').innerHTML = Object.entries(d.inventory_totals)
+  updateHTML('#inventory-summary', Object.entries(d.inventory_totals)
     .map(([c, q]) => {
       let fData = forecasts?.resource_forecasts?.find(r => r.category === c);
       let etaStr = '';
@@ -319,12 +356,12 @@ async function renderDashboard() {
         <div style="position:absolute; bottom:0; left:0; height:4px; width:${Math.min(100, q)}%; opacity: 0.5;"></div>
         <b>${q}</b><span>${c} available ${etaStr}</span>
       </div>`;
-    }).join('');
+    }).join(''));
 
-  $('#activity-feed').innerHTML = d.audit_excerpt.map(feedRow).join('') || '<li class="dim">No activity yet.</li>';
+  updateHTML('#activity-feed', d.audit_excerpt.map(feedRow).join('') || '<li class="dim">No activity yet.</li>');
 }
 
-const feedRow = (r) => `<li><details><summary><b>${esc(r.action_type.replace(/_/g, ' ').toLowerCase())}</b> · ${esc(readableAgency(r.description))}</summary><span class="dim">${esc(readableAgency(r.actor))} · ${new Date(r.timestamp).toLocaleString('en-IN')} · Zone ${esc(r.zone_id)} · Resource ${esc(r.resource_id)} · Allocation ${esc(r.allocation_id)} · ${esc(r.log_id)}</span></details></li>`;
+const feedRow = (r) => `<li><details><summary><b>${esc(String(r.action_type || 'INCOMPLETE_RECORD').replace(/_/g, ' ').toLowerCase())}</b> · ${esc(readableAgency(r.description || 'This older record did not capture its action details.'))}</summary><span class="dim">${esc(readableAgency(r.actor || 'Actor not recorded'))} · ${r.timestamp ? new Date(r.timestamp).toLocaleString('en-IN') : 'Time not recorded'} · Zone ${esc(r.zone_id || '—')} · Resource ${esc(r.resource_id || '—')} · Allocation ${esc(r.allocation_id || '—')} · ${esc(r.log_id)}</span></details></li>`;
 
 window.resolveFlag = async (id, action) => {
   await api(`/api/duplicate-flags/${id}/resolve`, { method: 'POST', body: JSON.stringify({ action }) });
@@ -853,9 +890,10 @@ window.runVoiceDemo = async () => {
 async function renderInventory() {
   if ($('#screen-inventory').contains(document.activeElement) && document.activeElement.matches('input, select')) return;
   const items = await api('/api/resource-items');
-  $('#inventory-list').innerHTML = items.map((r) => `
+  if ($('#screen-inventory').contains(document.activeElement) && document.activeElement.matches('input, select')) return;
+  updateHTML('#inventory-list', items.map((r) => `
     <div class="card"><h3>${esc(r.category)} <span class="dim">${r.quantity_available} ${esc(r.unit)} · ${esc(r.agency_name)} · ${r.status}</span></h3>
-    <div class="row"><label>Available quantity<input type="number" min="0" id="stock-${r.resource_id}" value="${r.quantity_available}" /></label><button onclick="saveStock('${r.resource_id}')">Save quantity</button><button class="secondary" onclick="restock('${r.resource_id}')">Restock +10</button></div></div>`).join('');
+    <div class="row"><label>Available quantity<input type="number" min="0" id="stock-${r.resource_id}" value="${r.quantity_available}" /></label><button onclick="saveStock('${r.resource_id}')">Save quantity</button><button class="secondary" onclick="restock('${r.resource_id}')">Restock +10</button></div></div>`).join(''));
   const agencySel = $('#inventory-form select[name=agency_id]');
   if (!agencySel.options.length) {
     const agencies = await api('/api/agencies');
@@ -879,11 +917,12 @@ $('#inventory-form').addEventListener('submit', async (e) => {
 
 let latestSitrepData = null;
 
-async function renderSitrep() {
+function renderSitrep() { return refreshOnce('sitrep', loadSitrep); }
+async function loadSitrep() {
   try {
     const s = await api('/api/sitrep');
     latestSitrepData = s;
-    $('#sitrep-content').innerHTML = `
+    updateHTML('#sitrep-content', `
       <div class="sitrep-card" style=" padding:20px;">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
           <h3 style="margin:0;">${esc(s.title)}</h3>
@@ -915,11 +954,11 @@ async function renderSitrep() {
         <h4> Recent Actions</h4>
         <ul class="feed">${(s.recent_actions||[]).map(feedRow).join('')}</ul>
       </div>
-    `;
+    `);
 
     setupVoiceBriefing();
   } catch(e) {
-    $('#sitrep-content').innerHTML = `<div class="banner">${esc(e.message)}</div>`;
+    updateHTML('#sitrep-content', `<div class="banner">${esc(e.message)}</div>`);
   }
 }
 $('#sitrep-refresh').onclick = renderSitrep;
@@ -1021,16 +1060,23 @@ function appendSimLog(event) {
   $('#sim-log').prepend(li);
 }
 
-async function renderAudit() {
+function renderAudit() { return refreshOnce('audit', loadAudit); }
+async function loadAudit() {
   const zone = $('#audit-zone').value.trim(), actor = $('#audit-actor').value.trim();
   const action = $('#audit-action').value.trim(), resource = $('#audit-resource').value.trim();
-  const rows = await api(`/api/audit-log?${new URLSearchParams({ ...(zone && { zone }), ...(actor && { actor }), ...(action && { action }), ...(resource && { resource }) })}`);
-  $('#audit-list').innerHTML = rows.map(feedRow).join('') || '<li class="dim">No matching entries.</li>';
+  // Filter locally so legacy records with missing actors cannot break the request.
+  const allRows = await api('/api/audit-log');
+  if (zone !== $('#audit-zone').value.trim() || actor !== $('#audit-actor').value.trim() || action !== $('#audit-action').value.trim() || resource !== $('#audit-resource').value.trim()) return;
+  const rows = allRows.filter(r => (!zone || String(r.zone_id ?? '').toLowerCase() === zone.toLowerCase())
+    && (!actor || `${r.actor ?? ''} ${readableAgency(r.actor)}`.toLowerCase().includes(actor.toLowerCase()))
+    && (!action || String(r.action_type ?? '').toLowerCase() === action.replace(/\s+/g, '_').toLowerCase())
+    && (!resource || String(r.resource_id ?? '').toLowerCase() === resource.toLowerCase()));
+  updateHTML('#audit-list', rows.map(feedRow).join('') || '<li class="dim">No matching entries.</li>');
 }
 $('#audit-refresh').onclick = renderAudit;
 
-if ($('#btn-demo-tour')) {
-  $('#btn-demo-tour').onclick = () => $('#demo-modal').classList.remove('hidden');
+for (const trigger of document.querySelectorAll('#demo-workspace, #btn-demo-tour')) {
+  trigger.onclick = () => $('#demo-modal').classList.remove('hidden');
 }
 if ($('#demo-modal-close')) {
   $('#demo-modal-close').onclick = () => $('#demo-modal').classList.add('hidden');
@@ -1157,6 +1203,7 @@ setupVoiceDispatcher();
 setupVoiceBriefing();
 show('dashboard');
 setInterval(() => {
+  if (document.hidden) return;
   if (state.screen === 'dashboard') renderDashboard().catch(reportError);
   if (state.screen === 'inventory') renderInventory().catch(reportError);
   if (state.screen === 'audit') renderAudit().catch(reportError);

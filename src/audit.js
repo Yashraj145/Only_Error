@@ -3,6 +3,11 @@
 import { store, nextId } from './store.js';
 
 export function audit({ actor, action_type, zone_id = null, resource_id = null, allocation_id = null, description }) {
+  for (const [field, value] of Object.entries({ actor, action_type, description })) {
+    if (typeof value !== 'string' || !value.trim()) {
+      throw new TypeError(`Audit ${field} must be a non-empty string`);
+    }
+  }
   const row = {
     log_id: nextId('LOG'),
     timestamp: new Date().toISOString(),

@@ -87,22 +87,30 @@ export function startSimulation(scenarioKey, speed = 1, broadcastFn = null) {
     const timer = setTimeout(async () => {
       simulationState.currentEventIndex = index + 1;
       let zone_name = '';
+      let zone_id = null;
 
       try {
         if (event.type === 'report') {
           const result = await submitReport(event.data, 'simulation-engine');
           const zoneId = result.zone_id || result.id;
+          zone_id = zoneId || null;
           simulationState.createdZoneIds.push(zoneId);
           zone_name = event.data.name;
         } else if (event.type === 'update') {
           const zoneId = simulationState.createdZoneIds[event.zone_index];
+          zone_id = zoneId || null;
           if (zoneId) {
             await updateZone(zoneId, event.data, 'simulation-engine');
           }
           zone_name = `Zone ${zoneId}`;
         }
 
-        audit('simulation_event', 'simulation-engine', `Executed ${event.type} event for ${zone_name}`);
+        audit({
+          actor: 'simulation-engine',
+          action_type: 'SIMULATION_EVENT',
+          zone_id,
+          description: `Executed ${event.type} event for ${zone_name}`,
+        });
 
         if (broadcastFn) {
           broadcastFn({

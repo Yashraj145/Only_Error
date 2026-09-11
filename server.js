@@ -154,7 +154,7 @@ app.get('/api/agencies', (_req, res) => {
 app.get('/api/audit-log', (req, res) => {
   let rows = [...store.AUDIT_LOG].reverse(); // newest first
   if (req.query.zone) rows = rows.filter((r) => r.zone_id === req.query.zone);
-  if (req.query.actor) rows = rows.filter((r) => r.actor.includes(req.query.actor));
+  if (req.query.actor) rows = rows.filter((r) => String(r.actor ?? '').includes(req.query.actor));
   if (req.query.action) rows = rows.filter(r => r.action_type === req.query.action);
   if (req.query.resource) rows = rows.filter(r => r.resource_id === req.query.resource);
   res.json(rows);
