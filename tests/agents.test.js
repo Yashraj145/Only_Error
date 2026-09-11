@@ -71,5 +71,5 @@ test('duplicate REPORT vs duplicate EFFORT are two separate checks', () => {
   assert.equal(first.accepted, true);
   const second = attemptClaim({ zone_id: 'Z1', category: 'food', agency_id: 'AG2' });
   assert.equal(second.accepted, false);
-  assert.equal(second.existing_claim_agency, 'Relief Corps'); // claiming agency shown
+  assert.equal(second.existing_claim_agency, 'National Disaster Response Force (NDRF)'); // claiming agency shown
 });

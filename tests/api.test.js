@@ -9,6 +9,10 @@ test('HTTP demo: seed → report → diversion → delivery → update → dupli
   const call = async (path, body) => { const r = await fetch(base + path, body === undefined ? {} : {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); return {status:r.status, body:await r.json()}; };
   try {
     await call('/api/seed',{});
+    const agencies = (await call('/api/agencies')).body;
+    assert.equal(agencies.find(a => a.agency_id === 'AG2').name, 'State Disaster Response Force (SDRF)');
+    assert.equal(agencies.find(a => a.agency_id === 'AG2').total_units_stocked, 60002);
+    assert.equal(agencies[0].active_claims, 0);
     const zones=(await call('/api/zones')).body; assert.deepEqual(zones.map(z=>z.tier),['critical','high','moderate','low']);
     const report={name:'Ward 9',location:'Ward 9, West District',population_affected:1000,needs:['medical'],rescue_needed:true,request_id:'demo-report'};
     const created=(await call('/api/reports',report)).body;
@@ -19,7 +23,7 @@ test('HTTP demo: seed → report → diversion → delivery → update → dupli
     assert.equal((await call(`/api/reallocations/${id}/accept`,{})).status,200);
     assert.equal((await call('/api/resource-items')).body.find(r=>r.category==='medical').quantity_available,12);
     const conflict=await call(`/zones/${created.zone_id}/claim`,{category:'medical',agency_id:'AG1',quantity:12});
-    assert.equal(conflict.status,409); assert.equal(conflict.body.existing_claim_agency,'MedAir International');
+    assert.equal(conflict.status,409); assert.equal(conflict.body.existing_claim_agency,'Indian Red Cross Society (IRCS)');
     assert.equal((await call(`/api/allocations/${id}/deliver`,{})).body.allocation.status,'fulfilled');
     assert.equal((await call('/api/resource-items')).body.find(r=>r.category==='medical').quantity_available,0);
     assert.equal((await call(`/api/allocations/${id}/deliver`,{})).status,404);

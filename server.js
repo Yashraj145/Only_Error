@@ -62,7 +62,6 @@ function validateReport(body, partial = false) {
   if ((!partial || body.needs != null) && (!Array.isArray(body.needs) || body.needs.some(c => !CATEGORIES.includes(c)))) throw Object.assign(new Error('Choose valid resource categories'), { status: 400 });
   for (const key of ['rescue_needed', 'urgency_high']) if (body[key] != null && typeof body[key] !== 'boolean') throw Object.assign(new Error('Urgency flags must be boolean'), { status: 400 });
 }
-app.get('/api/agencies', (_req, res) => res.json(store.AGENCIES));
 
 // ---------- reads ----------
 
@@ -489,7 +488,7 @@ app.get('*', (_req, res) => {
 const PORT = process.env.PORT || 3000;
 const isTest = process.env.NODE_ENV === 'test' || process.argv.some((arg) => arg.includes('test'));
 if (!isTest) {
-  app.listen(PORT, () => console.log(`Only_Error relief coordinator on http://localhost:${PORT}`));
+  app.listen(PORT, () => console.log(`Sanjeevani relief coordinator on http://localhost:${PORT}`));
 }
 
 export default app;

@@ -8,6 +8,30 @@ const api = (path, opts) => fetch(path, { headers: { 'Content-Type': 'applicatio
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 const state = { screen: 'dashboard' };
+const agencyNames = { AG1: 'National Disaster Response Force (NDRF)', AG2: 'State Disaster Response Force (SDRF)', AG3: 'Indian Red Cross Society (IRCS)' };
+const readableAgency = value => String(value ?? '').replace(/\bAG[123]\b/g, id => agencyNames[id]);
+const screens = {
+  dashboard: ['Response overview', 'Prioritise urgent needs and coordinate the next response.'],
+  report: ['Report an incident', 'Share what is happening and which resources are needed.'],
+  inventory: ['Relief resources', 'Review available supplies and update agency stock.'],
+  sitrep: ['Situation report', 'Review the current response and share a briefing.'],
+  simulation: ['Response simulation', 'Rehearse disaster scenarios in this demo workspace.'],
+  audit: ['Activity log', 'Trace reports, agency commitments and resource deliveries.']
+};
+function updateThemeControl() {
+  const dark = document.documentElement.dataset.theme === 'dark';
+  $('#theme-toggle').setAttribute('aria-checked', String(dark));
+  $('#theme-label').textContent = dark ? 'Dark mode' : 'Light mode';
+  document.querySelector('meta[name="theme-color"]').content = dark ? '#101a1b' : '#087f70';
+}
+$('#theme-toggle').onclick = () => {
+  document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  try { localStorage.setItem('sanjeevani-theme', document.documentElement.dataset.theme); } catch {}
+  updateThemeControl();
+};
+updateThemeControl();
+$('#new-report').onclick = () => show('report');
+document.querySelector('.brand').onclick = e => { e.preventDefault(); show('dashboard'); };
 import { readQueue, enqueueReport, flushQueue } from './reportQueue.js';
 let map = null;
 let zoneMarkers = {};
@@ -18,7 +42,7 @@ function initMap() {
   try {
     map = L.map('map-container').setView([20.5, 78.9], 5);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap'
+      attribution: ' OpenStreetMap'
     }).addTo(map);
   } catch (e) {
     console.error("Leaflet init failed", e);
@@ -32,9 +56,9 @@ function zoneLatLng(index, total) {
 }
 
 const AGENCY_BASES = {
-  'agency-relief': { name: 'Relief Corps Logistics Alpha', latlng: [21.25, 78.35], color: '#3b82f6', icon: '📦' },
-  'agency-fire': { name: 'City Fire Dept HQ', latlng: [19.95, 79.15], color: '#f97316', icon: '🚒' },
-  'agency-medair': { name: 'MedAir International Airfield', latlng: [20.85, 79.55], color: '#10b981', icon: '🚁' }
+  AG1: { name: 'NDRF demo base', latlng: [21.25, 78.35], color: '#087568', icon: '' },
+  AG2: { name: 'SDRF demo base', latlng: [19.95, 79.15], color: '#b24c13', icon: '' },
+  AG3: { name: 'IRCS demo base', latlng: [20.85, 79.55], color: '#447895', icon: '' }
 };
 
 let showCorridors = true;
@@ -58,12 +82,12 @@ function updateMap(zones, allocations = []) {
     if (!agencyMarkers[agId]) {
       const icon = L.divIcon({
         className: 'agency-icon',
-        html: `<div style="background:${base.color}; color:#fff; border-radius:6px; padding:3px 8px; font-size:11px; font-weight:700; box-shadow:0 2px 8px rgba(0,0,0,0.4); display:inline-flex; align-items:center; gap:4px; border:1px solid rgba(255,255,255,0.8); cursor:pointer;">${base.icon} ${esc(base.name.split(' ')[0])}</div>`,
+        html: `<div style=" padding:3px 8px; display:inline-flex; align-items:center; gap:4px;">${base.icon} ${esc(base.name.split(' ')[0])}</div>`,
         iconSize: [85, 24],
         iconAnchor: [42, 12]
       });
       agencyMarkers[agId] = L.marker(base.latlng, { icon }).addTo(map);
-      agencyMarkers[agId].bindPopup(`<b>🏢 ${esc(base.name)}</b><br><span class="dim">Strategic Dispatch Base · Ready</span>`);
+      agencyMarkers[agId].bindPopup(`<b> ${esc(base.name)}</b><br><span class="dim">Strategic Dispatch Base · Ready</span>`);
     }
   });
 
@@ -72,7 +96,7 @@ function updateMap(zones, allocations = []) {
       generatedPositions[z.zone_id] = zoneLatLng(i, zones.length || 1);
     }
     const latlng = generatedPositions[z.zone_id];
-    const colors = { critical: '#ef4444', high: '#f97316', moderate: '#eab308', low: '#22c55e' };
+    const colors = { critical: 'var(--critical)', high: 'var(--high)', moderate: '#eab308', low: 'var(--low)' };
     const radius = Math.max(8, Math.min(25, z.population_affected / 100));
     
     if (!zoneMarkers[z.zone_id]) {
@@ -107,9 +131,7 @@ function updateMap(zones, allocations = []) {
       if (a.status === 'confirmed' || a.status === 'allocated' || a.status === 'pending') {
         const zonePos = generatedPositions[a.zone_id];
         if (!zonePos) return;
-        let baseKey = 'agency-relief';
-        if (a.category === 'rescue') baseKey = 'agency-fire';
-        else if (a.category === 'medical') baseKey = 'agency-medair';
+        const baseKey = a.agency_id;
         const base = AGENCY_BASES[baseKey];
         if (!base) return;
 
@@ -121,7 +143,7 @@ function updateMap(zones, allocations = []) {
         }).addTo(map);
 
         line.bindPopup(`
-          <b>🚚 Active Supply Corridor</b><br>
+          <b> Active Supply Corridor</b><br>
           From: ${esc(base.name)}<br>
           To: ${esc(a.zone_name || a.zone_id)}<br>
           Dispatched: <b>${a.quantity} ${esc(a.category)}</b> [${a.status}]
@@ -133,11 +155,18 @@ function updateMap(zones, allocations = []) {
 }
 
 function show(screen) {
+  if (!screens[screen]) return;
   state.screen = screen;
+  $('#page-title').textContent = screens[screen][0];
+  $('#page-description').textContent = screens[screen][1];
+  $('#new-report').hidden = screen === 'report';
+  document.title = `${screens[screen][0]} | Sanjeevani`;
+  window.scrollTo({ top: 0, behavior: 'instant' });
   document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active'));
   const el = document.getElementById(`screen-${screen}`);
   if (el) el.classList.add('active');
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.screen === screen));
+  document.querySelectorAll('#nav button').forEach(b => b.setAttribute('aria-current', b.dataset.screen === screen ? 'page' : 'false'));
   if (screen === 'dashboard') {
     initMap();
     renderDashboard();
@@ -197,17 +226,16 @@ async function renderDashboard() {
     btnCorridors.__bound = true;
     btnCorridors.onclick = () => {
       showCorridors = !showCorridors;
-      btnCorridors.textContent = `🚚 Supply Corridors: ${showCorridors ? 'ON' : 'OFF'}`;
-      btnCorridors.style.borderColor = showCorridors ? '#38bdf8' : '#64748b';
-      btnCorridors.style.color = showCorridors ? '#38bdf8' : '#64748b';
+      btnCorridors.textContent = `Supply routes: ${showCorridors ? 'on' : 'off'}`;
+      btnCorridors.setAttribute('aria-pressed', String(showCorridors));
       renderDashboard();
     };
   }
 
   const getArrow = (k, v) => {
     if (prevStats[k] === undefined) return '';
-    if (v > prevStats[k]) return '<span style="color:var(--critical); font-size: 14px;">↑</span>';
-    if (v < prevStats[k]) return '<span style="color:var(--low); font-size: 14px;">↓</span>';
+    if (v > prevStats[k]) return '<span >↑</span>';
+    if (v < prevStats[k]) return '<span >↓</span>';
     return '';
   };
 
@@ -216,19 +244,19 @@ async function renderDashboard() {
     ['Active zones', d.active_zones, 'active_zones'],
     ['Critical zones', d.critical_zones, 'critical_zones'],
     ['Units allocated', d.resources_allocated, 'resources_allocated'],
-    ['Pending flags', d.pending_reports, 'pending_reports'],
-    ['Pending claims', pendingClaims, 'pending_claims'],
-  ].map(([label, v, k]) => `<div class="stat"><b>${v} ${getArrow(k, v)}</b><span>${label}</span></div>`).join('');
+    ['Reports to review', d.pending_reports, 'pending_reports'],
+    ['Agency commitments', pendingClaims, 'pending_claims'],
+  ].map(([label, v, k]) => `<div class="stat"><b>${Number(v).toLocaleString('en-IN')} ${getArrow(k, v)}</b><span>${label}</span></div>`).join('');
   
   prevStats = { active_zones: d.active_zones, critical_zones: d.critical_zones, resources_allocated: d.resources_allocated, pending_reports: d.pending_reports, pending_claims: pendingClaims };
 
   const urgent = zones.filter(z => z.tier === 'critical' && z.unclaimed_categories && z.unclaimed_categories.length);
   if ($('#critical-needs')) {
-    $('#critical-needs').innerHTML = urgent.length ? `<div class="banner"><b>Critical needs awaiting an agency</b>${urgent.map(z => `<div>${esc(z.name)}: ${z.unclaimed_categories.join(', ')}</div>`).join('')}</div>` : '';
+    $('#critical-needs').innerHTML = urgent.length ? `<div class="banner"><b>Critical needs awaiting an agency</b>${urgent.map(z => `<div>${esc(z.name)}: ${z.unclaimed_categories.join(', ')} <button class="link" onclick="openZone('${z.zone_id}')">Coordinate response →</button></div>`).join('')}</div>` : '<p class="dim">No unclaimed critical needs. Continue monitoring incoming reports.</p>';
   }
 
   if (forecasts && forecasts.alerts && forecasts.alerts.length > 0) {
-    $('#forecast-alerts').innerHTML = forecasts.alerts.map(a => `<div class="banner">⚠️ <b>ALERT</b> — ${esc(a)}</div>`).join('');
+    $('#forecast-alerts').innerHTML = forecasts.alerts.map(a => `<div class="banner"> <b>ALERT</b> — ${esc(a)}</div>`).join('');
   } else {
     $('#forecast-alerts').innerHTML = '';
   }
@@ -256,26 +284,26 @@ async function renderDashboard() {
   $('#zone-list').innerHTML = zones.map((z) => `
     <div class="card t-${z.tier}">
       <h3>${esc(z.name)} ${tierBadge(z.tier)}</h3>
-      <div class="dim">Score ${z.severity_score} · pop ${z.population_affected} · needs: ${z.needs.join(', ') || '—'}${z.override_applied ? ' · ⛑ rescue override' : ''}</div>
+      <div class="dim">Score ${z.severity_score} · pop ${z.population_affected} · needs: ${z.needs.join(', ') || '—'}${z.override_applied ? ' ·  rescue override' : ''}</div>
       <div class="dim">Gaps: ${Object.entries(z.gaps).filter(([, g]) => g > 0).map(([c, g]) => `${c}: ${g}`).join(' · ') || 'none'}</div>
-      ${z.tier === 'critical' && z.unclaimed_categories.length ? `<div class="row" style="color:var(--critical);">⚠ unclaimed: ${z.unclaimed_categories.join(', ')}</div>` : ''}
-      <div class="row"><button onclick="openZone('${z.zone_id}')">Detail · claims · history</button></div>
+      ${z.tier === 'critical' && z.unclaimed_categories.length ? `<div class="row critical">Awaiting agency: ${z.unclaimed_categories.join(', ')}</div>` : ''}
+      <div class="row"><button onclick="openZone('${z.zone_id}')">View needs & coordinate</button></div>
     </div>`).join('') || '<p class="dim">No zones.</p>';
 
   if ($('#agency-coordination')) {
     $('#agency-coordination').innerHTML = (agencies || []).map(ag => `
-      <div class="card" style="border-left-color:${ag.type === 'government' ? 'var(--accent)' : '#10b981'};">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
+      <div class="card" >
+        <div class="agency-heading">
           <b>${esc(ag.name)}</b>
-          <span class="badge" style="background:${ag.type === 'government' ? 'var(--accent)' : '#10b981'}; color:#fff;">${ag.type}</span>
+          <span class="badge" >${ag.type === 'government' ? 'Government response' : 'Humanitarian relief'}</span>
         </div>
         <div class="dim" style="margin-top:6px;">
-          ID: <code>${esc(ag.agency_id)}</code> · Stocked: <b>${ag.total_units_stocked}</b> units
+          Stock available: <b>${ag.total_units_stocked}</b> units
         </div>
         <div class="dim" style="margin-top:4px;">
-          Active Claims: <b>${ag.active_claims}</b> · Converted: <b>${ag.converted_claims}</b>
+          Active commitments: <b>${ag.active_claims}</b> · Allocated: <b>${ag.converted_claims}</b>
         </div>
-        ${ag.duplicate_attempts_blocked > 0 ? `<div style="color:var(--moderate); font-size:12px; margin-top:6px;">🛡️ <b>${ag.duplicate_attempts_blocked}</b> conflict(s) blocked by ledger</div>` : `<div class="dim" style="font-size:12px; margin-top:6px;">🛡️ 0 conflicts (clean coordination)</div>`}
+        ${ag.duplicate_attempts_blocked > 0 ? `<div style=" margin-top:6px;"> <b>${ag.duplicate_attempts_blocked}</b> conflict(s) blocked by ledger</div>` : `<div class="dim" style=" margin-top:6px;"> 0 conflicts (clean coordination)</div>`}
       </div>
     `).join('') || '<p class="dim">No active agencies.</p>';
   }
@@ -285,10 +313,10 @@ async function renderDashboard() {
       let fData = forecasts?.resource_forecasts?.find(r => r.category === c);
       let etaStr = '';
       if (fData && fData.hours_to_depletion != null && fData.hours_to_depletion < Infinity) {
-        etaStr = `<span class="dim" style="font-size:11px; margin-left: 8px;">Depletes in ${fData.hours_to_depletion.toFixed(1)}h</span>`;
+        etaStr = `<span class="dim" style=" margin-left: 8px;">Depletes in ${fData.hours_to_depletion.toFixed(1)}h</span>`;
       }
       return `<div class="stat" style="border-left:4px solid var(--accent); position:relative; overflow:hidden;">
-        <div style="position:absolute; bottom:0; left:0; height:4px; background:var(--accent); width:${Math.min(100, q)}%; opacity: 0.5;"></div>
+        <div style="position:absolute; bottom:0; left:0; height:4px; width:${Math.min(100, q)}%; opacity: 0.5;"></div>
         <b>${q}</b><span>${c} available ${etaStr}</span>
       </div>`;
     }).join('');
@@ -296,7 +324,7 @@ async function renderDashboard() {
   $('#activity-feed').innerHTML = d.audit_excerpt.map(feedRow).join('') || '<li class="dim">No activity yet.</li>';
 }
 
-const feedRow = (r) => `<li><details><summary><b>${esc(r.action_type)}</b> — ${esc(r.description)}</summary><span class="dim">${esc(r.actor)} · ${new Date(r.timestamp).toLocaleString()} · Zone ${esc(r.zone_id)} · Resource ${esc(r.resource_id)} · Allocation ${esc(r.allocation_id)} · ${esc(r.log_id)}</span></details></li>`;
+const feedRow = (r) => `<li><details><summary><b>${esc(r.action_type.replace(/_/g, ' ').toLowerCase())}</b> · ${esc(readableAgency(r.description))}</summary><span class="dim">${esc(readableAgency(r.actor))} · ${new Date(r.timestamp).toLocaleString('en-IN')} · Zone ${esc(r.zone_id)} · Resource ${esc(r.resource_id)} · Allocation ${esc(r.allocation_id)} · ${esc(r.log_id)}</span></details></li>`;
 
 window.resolveFlag = async (id, action) => {
   await api(`/api/duplicate-flags/${id}/resolve`, { method: 'POST', body: JSON.stringify({ action }) });
@@ -315,20 +343,10 @@ window.openZone = async (zoneId) => {
   const allGapped = [...new Set([...z.needs, ...(z.rescue_needed ? ['rescue'] : [])])];
   $('#zone-detail').innerHTML = `
     <h3>${esc(z.name)} ${tierBadge(z.tier)} <span class="dim">score ${z.severity_score}</span></h3>
-    <div class="dim">${esc(z.location)} · population ${z.population_affected}${z.override_applied ? ' · ⛑ rescue override applied' : ''}</div>
+    <div class="dim">${esc(z.location)} · population ${z.population_affected}${z.override_applied ? ' ·  rescue override applied' : ''}</div>
     
-    <h4>Explainability — Why this priority?</h4>
-    <div style="background:var(--bg); padding:10px; border-radius:8px; border:1px solid var(--line);">
-      <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Base Need</span><span>Population Multiplier</span><span>Urgency Multiplier</span></div>
-      <div style="display:flex; height:8px; border-radius:4px; overflow:hidden; background:var(--line);">
-        <div style="width:33%; background:var(--moderate);"></div>
-        <div style="width:33%; background:var(--high);"></div>
-        <div style="width:34%; background:var(--critical);"></div>
-      </div>
-      <div class="dim" style="margin-top:8px; font-size: 12px;">
-        Pressure: ×${breakdown.breakdown?.population_pressure || 1} · Urgency: ×${breakdown.breakdown?.urgency_multiplier || 1} ${breakdown.override_applied ? ' · <b>HARD OVERRIDE</b>' : ''}
-      </div>
-    </div>
+    <h4>Why this priority?</h4>
+    <p class="dim">${breakdown.override_applied ? 'Rescue is needed, so this zone receives critical priority.' : 'Priority reflects unmet resources, population pressure and reported urgency.'}</p>
 
     <h4>Score breakdown</h4>
     <table><tr><th>category</th><th>need</th><th>gap</th><th>ratio</th><th>weight</th></tr>
@@ -336,7 +354,7 @@ window.openZone = async (zoneId) => {
     </table>
     <div class="dim" style="margin-top:4px;">pressure ×${breakdown.breakdown?.population_pressure} · urgency ×${breakdown.breakdown?.urgency_multiplier}${breakdown.override_applied ? ' · hard override applied' : ''}</div>
     <button onclick="editZone('${z.zone_id}')" style="margin-top:6px;">Update Situation</button>
-    <h4>Claim grid</h4>
+    <h4>Assign agency commitments</h4>
     ${allGapped.length ? allGapped.map((c) => `<div class="card"><b>${c}</b> · outstanding ${z.outstanding_needs[c]}<div class="row"><label>Quantity<input id="qty-${c}" type="number" min="1" value="${Math.max(1,z.outstanding_needs[c])}" /></label>
       ${agencies.map((a) => `<button onclick="claim('${z.zone_id}','${c}','${a.agency_id}')">Claim · ${esc(a.name)}</button>`).join('')}</div></div>`).join('')
       : '<p class="dim">No unmet needs.</p>'}
@@ -384,11 +402,12 @@ window.deliverAlloc = async (allocationId, zoneId) => {
 
 const CATEGORIES = ['water', 'medical', 'food', 'shelter'];
 const chosen = new Set(['water']);
-$('#need-chips').innerHTML = CATEGORIES.map((c) => `<span class="chip${c === 'water' ? ' on' : ''}" data-c="${c}">${c}</span>`).join('');
+$('#need-chips').innerHTML = CATEGORIES.map((c) => `<button type="button" class="chip${c === 'water' ? ' on' : ''}" data-c="${c}" aria-pressed="${c === 'water'}">${c}</button>`).join('');
 $('#need-chips').addEventListener('click', (e) => {
   const chip = e.target.closest('.chip');
   if (!chip) return;
   chip.classList.toggle('on');
+  chip.setAttribute('aria-pressed', String(chip.classList.contains('on')));
   chip.classList.contains('on') ? chosen.add(chip.dataset.c) : chosen.delete(chip.dataset.c);
 });
 
@@ -450,10 +469,10 @@ $('#chat-send').onclick = async () => {
   $('#chat-input').value = '';
   try {
     const result = await api('/api/reports/natural', { method: 'POST', body: JSON.stringify({ text }) });
-    appendChat('system', `📋 Parsed report (confidence: ${(result.confidence * 100).toFixed(0)}%):\n• Location: ${result.parsed.location || 'unknown'}\n• Population: ${result.parsed.population_affected}\n• Needs: ${result.parsed.needs.join(', ') || 'none detected'}\n• Rescue: ${result.parsed.rescue_needed ? 'YES' : 'no'}\n• Urgency: ${result.parsed.urgency_high ? 'HIGH' : 'normal'}`);
+    appendChat('system', ` Parsed report (confidence: ${(result.confidence * 100).toFixed(0)}%):\n• Location: ${result.parsed.location || 'unknown'}\n• Population: ${result.parsed.population_affected}\n• Needs: ${result.parsed.needs.join(', ') || 'none detected'}\n• Rescue: ${result.parsed.rescue_needed ? 'YES' : 'no'}\n• Urgency: ${result.parsed.urgency_high ? 'HIGH' : 'normal'}`);
     appendChat('action', result.parsed);
   } catch (e) {
-    appendChat('system', '❌ ' + e.message);
+    appendChat('system', ' ' + e.message);
   }
 };
 
@@ -465,7 +484,7 @@ function appendChat(type, content) {
   const div = document.createElement('div');
   div.className = `chat-msg ${type}`;
   if (type === 'action') {
-    div.innerHTML = `<button onclick="submitParsedReport(this)" data-report='${JSON.stringify(content).replace(/'/g, '&#39;')}'>✅ Submit this report</button> <button class="secondary" onclick="this.parentElement.remove()">✏️ Edit manually</button>`;
+    div.innerHTML = `<button onclick="submitParsedReport(this)" data-report='${JSON.stringify(content).replace(/'/g, '&#39;')}'> Submit this report</button> <button class="secondary" onclick="this.parentElement.remove()"> Edit manually</button>`;
   } else {
     div.textContent = content;
   }
@@ -477,10 +496,10 @@ window.submitParsedReport = async (btn) => {
   const report = JSON.parse(btn.dataset.report);
   try {
     const r = await api('/api/reports', { method: 'POST', body: JSON.stringify(report) });
-    appendChat('system', `✅ Report submitted! Zone: ${r.zone_id} — ${r.message}`);
+    appendChat('system', ` Report submitted! Zone: ${r.zone_id} — ${r.message}`);
     btn.parentElement.remove();
   } catch (e) {
-    appendChat('system', '❌ ' + e.message);
+    appendChat('system', ' ' + e.message);
   }
 };
 
@@ -496,11 +515,11 @@ async function processVoiceDispatch(payload) {
   const hud = $('#acoustic-hud');
   if (hud) hud.classList.remove('hidden');
   $('#hud-distress').textContent = 'Analyzing...';
-  $('#hud-distress').style.color = '#f97316';
+  $('#hud-distress').style.color = 'var(--high)';
   $('#hud-pitch').textContent = 'Extracting...';
   $('#hud-energy').textContent = 'Computing...';
   $('#hud-rate').textContent = 'Processing...';
-  $('#hud-triage-summary').textContent = 'Extracting Librosa acoustic features and analyzing vocal distress...';
+  $('#hud-triage-summary').textContent = 'Analysing voice report…';
 
   try {
     const res = await api('/api/voice-report', {
@@ -510,7 +529,7 @@ async function processVoiceDispatch(payload) {
 
     const ac = res.acoustic;
     $('#hud-distress').textContent = `${ac.distress_score} / 100 (${ac.urgency_level})`;
-    $('#hud-distress').style.color = ac.distress_score >= 70 ? '#ef4444' : (ac.distress_score >= 45 ? '#f97316' : '#22c55e');
+    $('#hud-distress').style.color = ac.distress_score >= 70 ? 'var(--critical)' : (ac.distress_score >= 45 ? 'var(--high)' : 'var(--low)');
     $('#hud-pitch').textContent = `${ac.pitch_hz} Hz (var: ${ac.pitch_variance})`;
     $('#hud-energy').textContent = `${ac.energy_rms} RMS`;
     $('#hud-rate').textContent = `${ac.speech_rate} onsets/s`;
@@ -522,28 +541,28 @@ async function processVoiceDispatch(payload) {
       const range = Math.max(1, maxVal - minVal);
       $('#hud-mfcc-bars').innerHTML = ac.mfcc.map((v, i) => {
         const heightPct = Math.max(15, Math.min(100, ((v - minVal) / range) * 100));
-        return `<div title="MFCC ${i+1}: ${v}" style="flex:1; background:linear-gradient(to top, #3b82f6, #8b5cf6); height:${heightPct}%; border-radius:2px;"></div>`;
+        return `<div title="MFCC ${i+1}: ${v}" style="flex:1; height:${heightPct}%;"></div>`;
       }).join('');
     }
 
     $('#hud-triage-summary').innerHTML = `
       <b>AI Triage:</b> "${esc(res.transcript)}" ➔ <b>${esc(res.parsed.name)}</b> (${esc(res.parsed.location)})
-      ${res.parsed.rescue_needed ? ' · 🚨 <b>Trapped Survivors Flagged</b>' : ''}
-      ${res.parsed.urgency_high ? ' · ⚡ <b>Urgency Multiplier (×1.2) Applied</b>' : ''}
+      ${res.parsed.rescue_needed ? ' ·  <b>Trapped Survivors Flagged</b>' : ''}
+      ${res.parsed.urgency_high ? ' ·  <b>Urgency Multiplier (×1.2) Applied</b>' : ''}
     `;
 
-    appendChat('user', `🎙️ [Radio Dispatch]: "${res.transcript}"`);
-    appendChat('system', `🧠 Librosa Acoustic Distress: ${ac.distress_score}/100 (${ac.urgency_level}) with ${(ac.confidence * 100).toFixed(0)}% confidence.\nExtracted: ${res.parsed.name} | Needs: ${res.parsed.needs.join(', ')} | Rescue Override: ${res.parsed.rescue_needed ? 'YES' : 'no'}`);
+    appendChat('user', ` [Radio Dispatch]: "${res.transcript}"`);
+    appendChat('system', ` Voice distress estimate: ${ac.distress_score}/100 (${ac.urgency_level}) with ${(ac.confidence * 100).toFixed(0)}% confidence.\nExtracted: ${res.parsed.name} | Needs: ${res.parsed.needs.join(', ')} | Rescue Override: ${res.parsed.rescue_needed ? 'YES' : 'no'}`);
     
     if (res.report_result) {
-      appendChat('system', `✅ Priority Zone Created: ${res.report_result.zone_id} placed at tier ${res.report_result.status}.`);
+      appendChat('system', ` Priority Zone Created: ${res.report_result.zone_id} placed at tier ${res.report_result.status}.`);
     }
 
     renderDashboard();
     return res;
   } catch (err) {
     $('#hud-distress').textContent = 'Error: ' + err.message;
-    appendChat('system', `❌ Voice dispatch error: ${err.message}`);
+    appendChat('system', ` Voice dispatch error: ${err.message}`);
   }
 }
 
@@ -667,7 +686,7 @@ async function startRecording() {
             text += e.results[i][0].transcript + ' ';
           }
           window.__recognizedText = text.trim();
-          $('#rec-label').textContent = `🎙️ "${window.__recognizedText.slice(0, 24)}..."`;
+          $('#rec-label').textContent = ` "${window.__recognizedText.slice(0, 24)}..."`;
         };
         recognizer.start();
         window.__speechRecognizer = recognizer;
@@ -684,15 +703,15 @@ async function startRecording() {
     }
     recordTimer = setInterval(() => {
       const sec = Math.floor((Date.now() - recordStartTime) / 1000);
-      $('#rec-label').textContent = `🔴 Recording (00:${sec < 10 ? '0' : ''}${sec})... Click to Stop`;
+      $('#rec-label').textContent = ` Recording (00:${sec < 10 ? '0' : ''}${sec})... Click to Stop`;
     }, 500);
   } catch (err) {
     console.error(err);
     alert("Microphone Error: " + err.message + "\n\nTip: You can use the '1-Click Radio Presets' right below or upload an audio file!");
     if (btnRec) {
-      btnRec.style.background = '#ef4444';
+      btnRec.style.background = 'var(--critical)';
       btnRec.classList.remove('pulse');
-      $('#rec-label').textContent = 'Hold / Click to Record Voice';
+      $('#rec-label').textContent = 'Start recording';
     }
   }
 }
@@ -704,7 +723,7 @@ function stopRecording() {
 
   const btnRec = $('#btn-record-mic');
   if (btnRec) {
-    btnRec.style.background = '#ef4444';
+    btnRec.style.background = 'var(--critical)';
     btnRec.classList.remove('pulse');
     $('#rec-label').textContent = 'Encoding WAV audio...';
   }
@@ -732,7 +751,7 @@ function stopRecording() {
   const reader = new FileReader();
   reader.onloadend = async () => {
     const base64 = reader.result;
-    if (btnRec) $('#rec-label').textContent = 'Hold / Click to Record Voice';
+    if (btnRec) $('#rec-label').textContent = 'Start recording';
     await processVoiceDispatch({
       audio_base64: base64,
       transcript: window.__recognizedText || ''
@@ -753,12 +772,12 @@ function triggerVoiceBriefing() {
     window.speechSynthesis.cancel();
     isSpeaking = false;
     if (topBtn) {
-      topBtn.textContent = '🎙️ Play Voice Briefing';
-      topBtn.style.color = '#38bdf8';
+      topBtn.textContent = ' Play Voice Briefing';
+      topBtn.style.color = 'var(--accent)';
     }
     if (innerBtn) {
-      innerBtn.textContent = '🎙️ Play Voice Briefing';
-      innerBtn.style.color = '#38bdf8';
+      innerBtn.textContent = ' Play Voice Briefing';
+      innerBtn.style.color = 'var(--accent)';
     }
     return;
   }
@@ -780,31 +799,31 @@ function triggerVoiceBriefing() {
   utterance.onend = () => {
     isSpeaking = false;
     if (topBtn) {
-      topBtn.textContent = '🎙️ Play Voice Briefing';
-      topBtn.style.color = '#38bdf8';
+      topBtn.textContent = ' Play Voice Briefing';
+      topBtn.style.color = 'var(--accent)';
     }
     if (innerBtn) {
-      innerBtn.textContent = '🎙️ Play Voice Briefing';
-      innerBtn.style.color = '#38bdf8';
+      innerBtn.textContent = ' Play Voice Briefing';
+      innerBtn.style.color = 'var(--accent)';
     }
   };
 
   utterance.onerror = (err) => {
     console.warn("SpeechSynthesis error:", err);
     isSpeaking = false;
-    if (topBtn) topBtn.textContent = '🎙️ Play Voice Briefing';
-    if (innerBtn) innerBtn.textContent = '🎙️ Play Voice Briefing';
+    if (topBtn) topBtn.textContent = ' Play Voice Briefing';
+    if (innerBtn) innerBtn.textContent = ' Play Voice Briefing';
   };
 
   window.speechSynthesis.speak(utterance);
   isSpeaking = true;
   if (topBtn) {
-    topBtn.textContent = '⏹ Stop Voice Briefing';
-    topBtn.style.color = '#ef4444';
+    topBtn.textContent = ' Stop Voice Briefing';
+    topBtn.style.color = 'var(--critical)';
   }
   if (innerBtn) {
-    innerBtn.textContent = '⏹ Stop Voice Briefing';
-    innerBtn.style.color = '#ef4444';
+    innerBtn.textContent = ' Stop Voice Briefing';
+    innerBtn.style.color = 'var(--critical)';
   }
 }
 
@@ -839,8 +858,8 @@ async function renderInventory() {
     <div class="row"><label>Available quantity<input type="number" min="0" id="stock-${r.resource_id}" value="${r.quantity_available}" /></label><button onclick="saveStock('${r.resource_id}')">Save quantity</button><button class="secondary" onclick="restock('${r.resource_id}')">Restock +10</button></div></div>`).join('');
   const agencySel = $('#inventory-form select[name=agency_id]');
   if (!agencySel.options.length) {
-    const agencies = await api('/api/resource-items').then((rs) => [...new Set(rs.map((r) => r.agency_id))]);
-    agencySel.innerHTML = agencies.map((a) => `<option>${a}</option>`).join('');
+    const agencies = await api('/api/agencies');
+    agencySel.innerHTML = agencies.map((a) => `<option value="${esc(a.agency_id)}">${esc(a.name)}</option>`).join('');
     $('#inventory-form select[name=category]').innerHTML = [...CATEGORIES, 'rescue'].map((c) => `<option>${c}</option>`).join('');
   }
 }
@@ -865,35 +884,35 @@ async function renderSitrep() {
     const s = await api('/api/sitrep');
     latestSitrepData = s;
     $('#sitrep-content').innerHTML = `
-      <div class="sitrep-card" style="background:var(--card); padding:20px; border-radius:12px; border:1px solid var(--line);">
+      <div class="sitrep-card" style=" padding:20px;">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
-          <h3 style="margin:0; font-size:18px; color:#38bdf8;">${esc(s.title)}</h3>
-          <button id="btn-sitrep-speak-inner" class="secondary" style="border-color:#38bdf8; color:#38bdf8; font-weight:700; padding:6px 14px; font-size:13px; display:inline-flex; align-items:center; gap:6px; cursor:pointer;">
-            🎙️ Play Voice Briefing
+          <h3 style="margin:0;">${esc(s.title)}</h3>
+          <button id="btn-sitrep-speak-inner" class="secondary" style=" padding:6px 14px; display:inline-flex; align-items:center; gap:6px;">
+             Play Voice Briefing
           </button>
         </div>
         <div class="sitrep-narrative dim" style="margin-bottom:16px;">${esc(s.narrative)}</div>
         
-        <h4>📊 Summary</h4>
+        <h4> Summary</h4>
         <div class="strip">
           ${Object.entries(s.summary).map(([k,v]) => `<div class="stat"><b>${v}</b><span>${k.replace(/_/g,' ')}</span></div>`).join('')}
         </div>
         
-        <h4>🏘️ Zone Status</h4>
+        <h4> Zone Status</h4>
         <div class="cards">
           ${s.zone_status.map(z => `<div class="card t-${z.tier}"><h3>${esc(z.name)} <span class="badge ${z.tier}">${z.tier}</span></h3><div class="dim">Score: ${z.severity_score} · Trend: ${z.trend || '—'} · Top gaps: ${(z.top_gaps||[]).join(', ') || 'none'}</div></div>`).join('')}
         </div>
         
-        <h4>📦 Resource Status</h4>
+        <h4> Resource Status</h4>
         <table style="margin-bottom:16px;">
           <tr><th>Category</th><th>Available</th><th>Burn Rate</th><th>Depletion ETA</th><th>Status</th></tr>
           ${s.resource_status.map(r => `<tr><td>${r.category}</td><td>${r.available}</td><td>${r.burn_rate?.toFixed(1) || '0'}/hr</td><td>${r.hours_to_depletion != null ? (r.hours_to_depletion === Infinity ? '∞' : r.hours_to_depletion.toFixed(1) + 'h') : '—'}</td><td><span class="badge ${r.status}">${r.status}</span></td></tr>`).join('')}
         </table>
         
-        <h4>💡 Recommendations</h4>
-        <ul class="feed">${(s.recommendations||[]).map(r => `<li>🔸 ${esc(r)}</li>`).join('') || '<li class="dim">No recommendations at this time.</li>'}</ul>
+        <h4> Recommendations</h4>
+        <ul class="feed">${(s.recommendations||[]).map(r => `<li> ${esc(r)}</li>`).join('') || '<li class="dim">No recommendations at this time.</li>'}</ul>
         
-        <h4>📋 Recent Actions</h4>
+        <h4> Recent Actions</h4>
         <ul class="feed">${(s.recent_actions||[]).map(feedRow).join('')}</ul>
       </div>
     `;
@@ -909,7 +928,7 @@ if ($('#sitrep-export-md')) {
   $('#sitrep-export-md').onclick = () => {
     if (!latestSitrepData) return alert('Please wait for SITREP to load or click Refresh.');
     const s = latestSitrepData;
-    const md = `# ${s.title}
+    const md = `# Sanjeevani · ${s.title}
 Generated: ${new Date(s.timestamp).toLocaleString()}
 
 ## Executive Summary
@@ -937,7 +956,7 @@ ${(s.zone_status || []).map(z => `| ${z.name} | ${z.tier} | ${z.severity_score} 
 ${(s.resource_status || []).map(r => `| ${r.category} | ${r.available} | ${r.burn_rate?.toFixed(1) || 0} | ${r.hours_to_depletion != null ? r.hours_to_depletion.toFixed(1) + 'h' : 'Stable'} | ${r.status} |`).join('\n')}
 
 ## Recent Incident Log
-${(s.recent_actions || []).map(a => `- **${a.action_type}** (${a.actor}): ${a.description}`).join('\n')}
+${(s.recent_actions || []).map(a => `- **${a.action_type}** (${readableAgency(a.actor)}): ${readableAgency(a.description)}`).join('\n')}
 `;
 
     const blob = new Blob([md], { type: 'text/markdown' });
@@ -964,7 +983,7 @@ async function updateSimStatus() {
     if (status.running) {
       $('#sim-start').disabled = true;
       $('#sim-stop').disabled = false;
-      $('#sim-status').innerHTML = `<div class="banner proposal">🔴 LIVE — ${esc(status.scenario_name)} · ${status.events_completed}/${status.total_events} events · Speed ${status.speed}×</div>`;
+      $('#sim-status').innerHTML = `<div class="banner proposal"> LIVE — ${esc(status.scenario_name)} · ${status.events_completed}/${status.total_events} events · Speed ${status.speed}×</div>`;
     } else {
       $('#sim-start').disabled = false;
       $('#sim-stop').disabled = true;
@@ -1026,7 +1045,7 @@ window.runDemoStep = async (step) => {
   try {
     if (step === 1) {
       await api('/api/seed', { method: 'POST' });
-      if (out) out.innerHTML = `✅ <b>Step 1 Complete:</b> Seeded 4 baseline zones (Ward 3, 7, 11, 14). 12 scarce medical kits pre-committed to Ward 3.`;
+      if (out) out.innerHTML = ` <b>Step 1 Complete:</b> Seeded 4 baseline zones (Ward 3, 7, 11, 14). 12 scarce medical kits pre-committed to Ward 3.`;
       show('dashboard');
     } else if (step === 2) {
       const res = await api('/api/reports', {
@@ -1036,7 +1055,7 @@ window.runDemoStep = async (step) => {
           needs: ['medical', 'rescue'], rescue_needed: true, urgency_high: true
         })
       });
-      if (out) out.innerHTML = `✅ <b>Step 2 Complete:</b> Ward 9 recorded with <b>rescue_needed: true</b> → Hard override fired → Tier: CRITICAL. Reallocation agent proposed diversion card on dashboard!`;
+      if (out) out.innerHTML = ` <b>Step 2 Complete:</b> Ward 9 recorded with <b>rescue_needed: true</b> → Hard override fired → Tier: CRITICAL. Reallocation agent proposed diversion card on dashboard!`;
       show('dashboard');
     } else if (step === 3) {
       const props = await api('/api/reallocations');
@@ -1047,9 +1066,9 @@ window.runDemoStep = async (step) => {
         if (ward9Alloc) {
           await api(`/api/allocations/${ward9Alloc.allocation_id}/deliver`, { method: 'POST', body: '{}' });
         }
-        if (out) out.innerHTML = `✅ <b>Step 3 Complete:</b> Accepted re-allocation proposal. Ward 3 allocation marked <i>diverted</i>. Stock delivered to Ward 9. Inventory decremented at delivery only!`;
+        if (out) out.innerHTML = ` <b>Step 3 Complete:</b> Accepted re-allocation proposal. Ward 3 allocation marked <i>diverted</i>. Stock delivered to Ward 9. Inventory decremented at delivery only!`;
       } else {
-        if (out) out.innerHTML = `ℹ️ No open proposal found. Make sure Step 2 was run first.`;
+        if (out) out.innerHTML = ` No open proposal found. Make sure Step 2 was run first.`;
       }
       show('dashboard');
     } else if (step === 4) {
@@ -1057,7 +1076,7 @@ window.runDemoStep = async (step) => {
         method: 'POST',
         body: JSON.stringify({ population_affected: 1600, urgency_high: true })
       });
-      if (out) out.innerHTML = `✅ <b>Step 4 Complete:</b> Ward 7 population doubled (800 → 1600). Severity score surged live. Reallocation check ran and logged provable <b>no-op</b> to audit trail!`;
+      if (out) out.innerHTML = ` <b>Step 4 Complete:</b> Ward 7 population doubled (800 → 1600). Severity score surged live. Reallocation check ran and logged provable <b>no-op</b> to audit trail!`;
       show('dashboard');
     } else if (step === 5) {
       await api('/api/reports', {
@@ -1067,7 +1086,7 @@ window.runDemoStep = async (step) => {
           needs: ['medical', 'food']
         })
       });
-      if (out) out.innerHTML = `✅ <b>Step 5 Complete:</b> Resubmitted Ward 3 report. Duplicate detector flagged match score ≥ 3! Notice the review banner on top of Dashboard.`;
+      if (out) out.innerHTML = ` <b>Step 5 Complete:</b> Resubmitted Ward 3 report. Duplicate detector flagged match score ≥ 3! Notice the review banner on top of Dashboard.`;
       show('dashboard');
     } else if (step === 6) {
       try {
@@ -1080,14 +1099,14 @@ window.runDemoStep = async (step) => {
           body: JSON.stringify({ category: 'medical', agency_id: 'AG1', quantity: 10 })
         });
       } catch(e) {}
-      if (out) out.innerHTML = `✅ <b>Step 6 Complete:</b> Ward 14 claimed medical supplies while stock was empty (0). Allocation agent issued <b>partial allocation</b> (0 units) and logged shortfall honestly to audit log!`;
+      if (out) out.innerHTML = ` <b>Step 6 Complete:</b> Ward 14 claimed medical supplies while stock was empty (0). Allocation agent issued <b>partial allocation</b> (0 units) and logged shortfall honestly to audit log!`;
       show('dashboard');
     } else if (step === 7) {
-      if (out) out.innerHTML = `✅ <b>Step 7 Complete:</b> Switched to SITREP view. Review auto-generated intelligence brief and actionable recommendations!`;
+      if (out) out.innerHTML = ` <b>Step 7 Complete:</b> Switched to SITREP view. Review auto-generated intelligence brief and actionable recommendations!`;
       show('sitrep');
     }
   } catch(err) {
-    if (out) out.innerHTML = `❌ Error in Step ${step}: ${err.message}`;
+    if (out) out.innerHTML = ` Error in Step ${step}: ${err.message}`;
   }
 };
 
@@ -1113,6 +1132,27 @@ window.addEventListener('unhandledrejection', e => {
   e.preventDefault();
 });
 
+// Keep dialogs usable with keyboards, and return focus to the opening control.
+for (const modal of document.querySelectorAll('.modal')) {
+  let returnFocus = null;
+  let wasOpen = false;
+  new MutationObserver(() => {
+    const open = !modal.classList.contains('hidden');
+    if (open && !wasOpen) { returnFocus = document.activeElement; modal.querySelector('.close').focus(); }
+    if (!open && wasOpen) { returnFocus?.focus(); }
+    wasOpen = open;
+    document.body.style.overflow = document.querySelector('.modal:not(.hidden)') ? 'hidden' : '';
+  }).observe(modal, { attributes: true, attributeFilter: ['class'] });
+  modal.addEventListener('click', e => { if (e.target === modal) modal.classList.add('hidden'); });
+  modal.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { modal.classList.add('hidden'); return; }
+    if (e.key !== 'Tab') return;
+    const controls = [...modal.querySelectorAll('button, input, select, a[href], summary, [tabindex="0"]')].filter(el => !el.disabled && el.getClientRects().length);
+    const first = controls[0], last = controls.at(-1);
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+    if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+  });
+}
 setupVoiceDispatcher();
 setupVoiceBriefing();
 show('dashboard');

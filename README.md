@@ -1,4 +1,4 @@
-# Only_Error — Disaster Relief & Emergency Resource Coordinator
+# Sanjeevani — Disaster Relief & Emergency Resource Coordinator
 
 PS20 prototype with a Node/Express server, plain-function agents, shared in-memory collections and a responsive browser client.
 

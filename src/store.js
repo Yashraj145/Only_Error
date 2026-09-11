@@ -87,9 +87,9 @@ export function seedDemoData() {
   resetStore();
 
   store.AGENCIES.push(
-    { agency_id: 'AG1', name: 'Relief Corps', type: 'ngo' },
-    { agency_id: 'AG2', name: 'City Fire Department', type: 'government' },
-    { agency_id: 'AG3', name: 'MedAir International', type: 'ngo' },
+    { agency_id: 'AG1', name: 'National Disaster Response Force (NDRF)', type: 'government' },
+    { agency_id: 'AG2', name: 'State Disaster Response Force (SDRF)', type: 'government' },
+    { agency_id: 'AG3', name: 'Indian Red Cross Society (IRCS)', type: 'ngo' },
   );
 
   store.RESOURCE_ITEMS.push(
