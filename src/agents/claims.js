@@ -1,7 +1,7 @@
 // §9 — Duplicate-EFFORT / claim check. Deliberately a LOOKUP against CLAIMS and
 // ALLOCATIONS — not text matching (§2). Two agencies independently committing to
 // the same zone+category is blocked here, with the claiming agency named.
-import { store, nextId, isUndelivered } from '../store.js';
+import { store, nextId, isUndelivered, getResource, getZone, CATEGORIES } from '../store.js';
 import { audit } from '../audit.js';
 
 export const CLAIM_TTL_MINUTES = 30; // simplified: visible countdown, not a real timer (§14)
@@ -21,10 +21,12 @@ export function existingCommitment(zoneId, category) {
 // Returns { accepted, existing_claim_agency?, claim? }. Runs on EVERY claim
 // action (§9). Accepted claims are `pending` until delivery converts them.
 export function attemptClaim({ zone_id, category, agency_id, quantity }) {
+  if (!getZone(zone_id) || !CATEGORIES.includes(category) || !store.AGENCIES.some(a => a.agency_id === agency_id)) throw Object.assign(new Error('Valid zone, category and agency required'), { status: 400 });
+  if (quantity != null && (!Number.isFinite(quantity) || quantity <= 0)) throw Object.assign(new Error('Quantity must be positive'), { status: 400 });
   const existing = existingCommitment(zone_id, category);
   const agency = store.AGENCIES.find((a) => a.agency_id === agency_id);
   if (existing) {
-    const holderId = existing.row.agency_id;
+    const holderId = existing.row.agency_id || getResource(existing.row.resource_id)?.agency_id;
     const holder = store.AGENCIES.find((a) => a.agency_id === holderId);
     audit({
       actor: `agency:${agency_id}`,

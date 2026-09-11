@@ -2,12 +2,13 @@
 const $ = (sel) => document.querySelector(sel);
 const api = (path, opts) => fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts }).then(async (r) => {
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error(body.error || r.statusText), { status: r.status, body });
+  if (!r.ok) throw Object.assign(new Error(body.error || (body.existing_claim_agency ? 'Already claimed by ' + body.existing_claim_agency : r.statusText)), { status: r.status, body });
   return body;
 });
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 const state = { screen: 'dashboard' };
+import { readQueue, enqueueReport, flushQueue } from './reportQueue.js';
 let map = null;
 let zoneMarkers = {};
 let generatedPositions = {}; // store fake coords so they don't jump
@@ -158,6 +159,7 @@ document.getElementById('nav').addEventListener('click', (e) => {
 });
 
 const tierBadge = (tier) => `<span class="badge ${tier}">${tier}</span>`;
+document.querySelector('button.link[data-screen="audit"]').onclick = () => show('audit');
 
 let eventSource = null;
 function connectSSE() {
@@ -209,12 +211,21 @@ async function renderDashboard() {
     return '';
   };
 
+  const pendingClaims = zones.reduce((n, z) => n + (z.claims ? z.claims.filter(c => c.status === 'pending').length : 0), 0);
   $('#status-strip').innerHTML = [
-    ['Active zones', d.active_zones, 'active_zones'], ['Critical zones', d.critical_zones, 'critical_zones'],
-    ['Units allocated', d.resources_allocated, 'resources_allocated'], ['Pending flags', d.pending_reports, 'pending_reports'],
+    ['Active zones', d.active_zones, 'active_zones'],
+    ['Critical zones', d.critical_zones, 'critical_zones'],
+    ['Units allocated', d.resources_allocated, 'resources_allocated'],
+    ['Pending flags', d.pending_reports, 'pending_reports'],
+    ['Pending claims', pendingClaims, 'pending_claims'],
   ].map(([label, v, k]) => `<div class="stat"><b>${v} ${getArrow(k, v)}</b><span>${label}</span></div>`).join('');
   
-  prevStats = { active_zones: d.active_zones, critical_zones: d.critical_zones, resources_allocated: d.resources_allocated, pending_reports: d.pending_reports };
+  prevStats = { active_zones: d.active_zones, critical_zones: d.critical_zones, resources_allocated: d.resources_allocated, pending_reports: d.pending_reports, pending_claims: pendingClaims };
+
+  const urgent = zones.filter(z => z.tier === 'critical' && z.unclaimed_categories && z.unclaimed_categories.length);
+  if ($('#critical-needs')) {
+    $('#critical-needs').innerHTML = urgent.length ? `<div class="banner"><b>Critical needs awaiting an agency</b>${urgent.map(z => `<div>${esc(z.name)}: ${z.unclaimed_categories.join(', ')}</div>`).join('')}</div>` : '';
+  }
 
   if (forecasts && forecasts.alerts && forecasts.alerts.length > 0) {
     $('#forecast-alerts').innerHTML = forecasts.alerts.map(a => `<div class="banner">⚠️ <b>ALERT</b> — ${esc(a)}</div>`).join('');
@@ -228,7 +239,7 @@ async function renderDashboard() {
       <span class="dim">(match score ${f.score} ≥ 3: ${Object.entries(f.components).filter(([, v]) => v > 0).map(([k]) => k).join(', ') || '—'})</span>
       <div class="row">
         <button onclick="resolveFlag('${f.flag_id}','merge')">Merge into ${esc(f.matched_zone_name)}</button>
-        <button class="secondary" onclick="resolveFlag('${f.flag_id}','dismiss')">Dismiss (new zone)</button>
+        <button class="secondary" onclick="resolveFlag('${f.flag_id}','dismiss')">Keep as new report</button>
       </div>
     </div>`).join('');
 
@@ -285,7 +296,7 @@ async function renderDashboard() {
   $('#activity-feed').innerHTML = d.audit_excerpt.map(feedRow).join('') || '<li class="dim">No activity yet.</li>';
 }
 
-const feedRow = (r) => `<li><b>${esc(r.action_type)}</b> — ${esc(r.description)}<span class="dim">${esc(r.actor)} · ${new Date(r.timestamp).toLocaleTimeString()}${r.zone_id ? ` · ${esc(r.zone_id)}` : ''}</span></li>`;
+const feedRow = (r) => `<li><details><summary><b>${esc(r.action_type)}</b> — ${esc(r.description)}</summary><span class="dim">${esc(r.actor)} · ${new Date(r.timestamp).toLocaleString()} · Zone ${esc(r.zone_id)} · Resource ${esc(r.resource_id)} · Allocation ${esc(r.allocation_id)} · ${esc(r.log_id)}</span></details></li>`;
 
 window.resolveFlag = async (id, action) => {
   await api(`/api/duplicate-flags/${id}/resolve`, { method: 'POST', body: JSON.stringify({ action }) });
@@ -300,8 +311,8 @@ window.decideProposal = async (id, action) => {
 window.openZone = async (zoneId) => {
   const z = await api('/api/zones').then((zs) => zs.find((x) => x.zone_id === zoneId));
   const breakdown = await api(`/zones/${zoneId}/score-breakdown`);
-  const agencies = await api('/api/resource-items').then((rs) => [...new Set(rs.map((r) => r.agency_id))]);
-  const allGapped = Object.keys(z.gaps).filter((c) => z.gaps[c] > 0);
+  const agencies = await api('/api/agencies');
+  const allGapped = [...new Set([...z.needs, ...(z.rescue_needed ? ['rescue'] : [])])];
   $('#zone-detail').innerHTML = `
     <h3>${esc(z.name)} ${tierBadge(z.tier)} <span class="dim">score ${z.severity_score}</span></h3>
     <div class="dim">${esc(z.location)} · population ${z.population_affected}${z.override_applied ? ' · ⛑ rescue override applied' : ''}</div>
@@ -323,13 +334,14 @@ window.openZone = async (zoneId) => {
     <table><tr><th>category</th><th>need</th><th>gap</th><th>ratio</th><th>weight</th></tr>
     ${(breakdown.breakdown?.per_category || []).map((p) => `<tr><td>${p.category}</td><td>${p.need}</td><td>${p.gap}</td><td>${p.gap_ratio}</td><td>${p.weight}</td></tr>`).join('')}
     </table>
-    
+    <div class="dim" style="margin-top:4px;">pressure ×${breakdown.breakdown?.population_pressure} · urgency ×${breakdown.breakdown?.urgency_multiplier}${breakdown.override_applied ? ' · hard override applied' : ''}</div>
+    <button onclick="editZone('${z.zone_id}')" style="margin-top:6px;">Update Situation</button>
     <h4>Claim grid</h4>
-    ${allGapped.length ? allGapped.map((c) => `<div class="row"><span>${c}</span>${z.unclaimed_categories.includes(c)
-      ? agencies.map((a) => `<button onclick="claim('${z.zone_id}','${c}','${a}')">Claim (${a})</button>`).join('')
-      : '<span class="dim">already claimed/allocated</span>'}</div>`).join('')
+    ${allGapped.length ? allGapped.map((c) => `<div class="card"><b>${c}</b> · outstanding ${z.outstanding_needs[c]}<div class="row"><label>Quantity<input id="qty-${c}" type="number" min="1" value="${Math.max(1,z.outstanding_needs[c])}" /></label>
+      ${agencies.map((a) => `<button onclick="claim('${z.zone_id}','${c}','${a.agency_id}')">Claim · ${esc(a.name)}</button>`).join('')}</div></div>`).join('')
       : '<p class="dim">No unmet needs.</p>'}
-    
+    <h4>Agency commitments</h4>
+    ${z.claims.map(c => `<div class="row">${esc(agencies.find(a => a.agency_id === c.agency_id)?.name)} · ${esc(c.category)} · ${c.quantity ?? 'outstanding need'} · ${esc(c.status)} · ${new Date(c.timestamp).toLocaleTimeString()} ${c.status === 'pending' ? `<button onclick="deliverClaim('${z.zone_id}','${c.category}','${c.agency_id}')">Confirm Delivery</button>` : ''}</div>`).join('') || '<p>No pending claims.</p>'}
     <h4>Allocation history</h4>
     ${z.allocations.map((a) => `<div class="row dim">[${a.status}] ${a.quantity} ${a.category} — ${esc(a.reason_text)}${a.status === 'confirmed' ? ` <button onclick="deliverAlloc('${a.allocation_id}', '${z.zone_id}')">Confirm delivery (${a.quantity})</button>` : ''}</div>`).join('') || '<p class="dim">None yet.</p>'}
     
@@ -340,13 +352,28 @@ window.openZone = async (zoneId) => {
 
 window.claim = async (zoneId, category, agencyId) => {
   try {
-    await api(`/zones/${zoneId}/claim`, { method: 'POST', body: JSON.stringify({ category, agency_id: agencyId }) });
-    await api(`/zones/${zoneId}/deliver`, { method: 'POST', body: JSON.stringify({ category, agency_id: agencyId }) });
+    await api(`/zones/${zoneId}/claim`, { method: 'POST', body: JSON.stringify({ category, agency_id: agencyId, quantity: Number($('#qty-' + category).value) }) });
   } catch (e) { alert(e.message); }
   openZone(zoneId);
 };
 
 $('#zone-modal-close').onclick = () => $('#zone-modal').classList.add('hidden');
+window.deliverClaim = async (zoneId, category, agencyId) => {
+  await api(`/zones/${zoneId}/deliver`, { method: 'POST', body: JSON.stringify({ category, agency_id: agencyId }) });
+  await openZone(zoneId);
+  await renderDashboard();
+};
+window.editZone = async zoneId => {
+  const z = (await api('/api/zones')).find(z => z.zone_id === zoneId);
+  $('#zone-detail').innerHTML = `<h3>Update ${esc(z.name)}</h3><form id="update-form"><label>Population affected<input name="population_affected" type="number" min="0" required value="${z.population_affected}" /></label>
+    <fieldset><legend>Resource needs</legend>${CATEGORIES.map(c => `<label class="check"><input type="checkbox" name="needs" value="${c}" ${z.needs.includes(c) ? 'checked' : ''} />${c}</label>`).join('')}</fieldset>
+    <label class="check"><input type="checkbox" name="rescue_needed" ${z.rescue_needed ? 'checked' : ''} />Rescue needed</label><label class="check"><input type="checkbox" name="urgency_high" ${z.urgency_high ? 'checked' : ''} />Urgent</label><button>Save Situation</button></form>`;
+  $('#update-form').onsubmit = async e => {
+    e.preventDefault(); const f = new FormData(e.target);
+    await api(`/zones/${zoneId}/update`, { method: 'POST', body: JSON.stringify({ population_affected: Number(f.get('population_affected')), needs: f.getAll('needs'), rescue_needed: f.has('rescue_needed'), urgency_high: f.has('urgency_high') }) });
+    await openZone(zoneId); await renderDashboard();
+  };
+};
 
 window.deliverAlloc = async (allocationId, zoneId) => {
   try {
@@ -365,20 +392,56 @@ $('#need-chips').addEventListener('click', (e) => {
   chip.classList.contains('on') ? chosen.add(chip.dataset.c) : chosen.delete(chip.dataset.c);
 });
 
-$('#report-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const f = new FormData(e.target);
+let reportStep = 0;
+function reportData() {
+  const f = new FormData($('#report-form'));
+  return { name: f.get('name').trim(), location: f.get('location').trim(), population_affected: Number(f.get('population_affected')), needs: [...chosen], rescue_needed: f.has('rescue_needed'), urgency_high: f.has('urgency_high') };
+}
+function showReportStep(step) {
+  reportStep = step;
+  document.querySelectorAll('[data-report-step]').forEach(el => el.hidden = Number(el.dataset.reportStep) !== step);
+  $('#report-step-label').textContent = `Step ${step + 1} of 4 · ${['Zone details', 'Resource needs', 'Urgency', 'Review'][step]}`;
+  $('#report-back').hidden = step === 0; $('#report-next').hidden = step === 3; $('#report-submit').hidden = step !== 3;
+  if (step === 3) { const r = reportData(); $('#report-review').innerHTML = `<h3>${esc(r.name)}</h3><p>${esc(r.location)} · ${r.population_affected} people</p><p>Needs: ${r.needs.join(', ')}</p><p>Rescue: ${r.rescue_needed ? 'Yes' : 'No'} · Urgent: ${r.urgency_high ? 'Yes' : 'No'}</p>`; }
+}
+$('#report-next').onclick = () => { if (reportStep === 0 && !$('#report-form').reportValidity()) return; showReportStep(Math.min(3, reportStep + 1)); };
+$('#report-back').onclick = () => showReportStep(Math.max(0, reportStep - 1));
+$('#use-location').onclick = () => {
+  if (!navigator.geolocation) return reportError(new Error('Location unavailable; enter a landmark manually.'));
+  navigator.geolocation.getCurrentPosition(p => { $('#report-form input[name=location]').value = `${p.coords.latitude.toFixed(5)}, ${p.coords.longitude.toFixed(5)}`; }, () => reportError(new Error('Location unavailable; enter a landmark manually.')));
+};
+let syncing = false;
+function queuedReports() { return readQueue(localStorage); }
+function connectionState() { $('#connection-status').textContent = `${navigator.onLine ? 'Connected' : 'Offline'} · ${queuedReports().length} queued reports. Offline reports await server scoring.`; }
+async function syncReports() {
+  if (syncing || !navigator.onLine) return;
+  syncing = true;
   try {
-    const r = await api('/api/reports', { method: 'POST', body: JSON.stringify({
-      name: f.get('name'), location: f.get('location'), population_affected: +f.get('population_affected'),
-      needs: [...chosen], rescue_needed: f.get('rescue_needed') === 'on', urgency_high: f.get('urgency_high') === 'on',
-    }) });
-    $('#report-result').innerHTML = `<div class="banner ${r.status === 'duplicate' ? '' : 'proposal'}">${esc(r.message)}</div>`;
-    if (r.status === 'new') show('dashboard');
-  } catch (err) {
-    $('#report-result').innerHTML = `<div class="banner">${esc(err.message)}</div>`;
-  }
+    await flushQueue(localStorage, first => api('/api/reports', { method: 'POST', body: JSON.stringify(first) }));
+    connectionState();
+  } catch (error) { reportError(new Error(`Report saved locally; retry pending. ${error.message}`)); }
+  finally { syncing = false; }
+}
+window.addEventListener('online', syncReports);
+window.addEventListener('offline', connectionState);
+$('#report-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  if (reportStep !== 3) return;
+  $('#report-submit').disabled = true;
+  const report = { ...reportData(), request_id: crypto.randomUUID() };
+  try {
+    if (!navigator.onLine) throw new TypeError('Offline');
+    const r = await api('/api/reports', { method: 'POST', body: JSON.stringify(report) });
+    $('#report-result').textContent = r.status === 'duplicate' ? r.message + '. Open Dashboard to review.' : r.message;
+  } catch (error) {
+    if (error.status) { $('#report-result').textContent = error.message; return; }
+    enqueueReport(localStorage, report);
+    $('#report-result').textContent = 'Report saved on this device. It will sync when connectivity returns.';
+  } finally { $('#report-submit').disabled = false; connectionState(); }
+  showReportStep(0);
 });
+connectionState();
+syncReports();
 
 $('#chat-send').onclick = async () => {
   const text = $('#chat-input').value.trim();
@@ -769,10 +832,11 @@ window.runVoiceDemo = async () => {
 };
 
 async function renderInventory() {
+  if ($('#screen-inventory').contains(document.activeElement) && document.activeElement.matches('input, select')) return;
   const items = await api('/api/resource-items');
   $('#inventory-list').innerHTML = items.map((r) => `
     <div class="card"><h3>${esc(r.category)} <span class="dim">${r.quantity_available} ${esc(r.unit)} · ${esc(r.agency_name)} · ${r.status}</span></h3>
-    <div class="row"><button class="secondary" onclick="restock('${r.resource_id}')">Restock +10</button></div></div>`).join('');
+    <div class="row"><label>Available quantity<input type="number" min="0" id="stock-${r.resource_id}" value="${r.quantity_available}" /></label><button onclick="saveStock('${r.resource_id}')">Save quantity</button><button class="secondary" onclick="restock('${r.resource_id}')">Restock +10</button></div></div>`).join('');
   const agencySel = $('#inventory-form select[name=agency_id]');
   if (!agencySel.options.length) {
     const agencies = await api('/api/resource-items').then((rs) => [...new Set(rs.map((r) => r.agency_id))]);
@@ -940,7 +1004,8 @@ function appendSimLog(event) {
 
 async function renderAudit() {
   const zone = $('#audit-zone').value.trim(), actor = $('#audit-actor').value.trim();
-  const rows = await api(`/api/audit-log?${new URLSearchParams({ ...(zone && { zone }), ...(actor && { actor }) })}`);
+  const action = $('#audit-action').value.trim(), resource = $('#audit-resource').value.trim();
+  const rows = await api(`/api/audit-log?${new URLSearchParams({ ...(zone && { zone }), ...(actor && { actor }), ...(action && { action }), ...(resource && { resource }) })}`);
   $('#audit-list').innerHTML = rows.map(feedRow).join('') || '<li class="dim">No matching entries.</li>';
 }
 $('#audit-refresh').onclick = renderAudit;
@@ -1026,7 +1091,34 @@ window.runDemoStep = async (step) => {
   }
 };
 
+if ($('#reset-demo')) {
+  $('#reset-demo').onclick = async () => {
+    if (!confirm('Reset all demo reports, claims and deliveries to the four-zone starting scenario?')) return;
+    await api('/api/seed', { method: 'POST' });
+    $('#zone-modal').classList.add('hidden');
+    await renderDashboard();
+  };
+}
+
+window.saveStock = async resourceId => {
+  await api('/api/resource-items', { method: 'POST', body: JSON.stringify({ resource_id: resourceId, quantity_available: Number($('#stock-' + resourceId).value) }) });
+  await renderInventory();
+};
+
+function reportError(error) {
+  if ($('#connection-status')) $('#connection-status').textContent = error.message || 'Connection unavailable';
+}
+window.addEventListener('unhandledrejection', e => {
+  reportError(e.reason);
+  e.preventDefault();
+});
+
 setupVoiceDispatcher();
 setupVoiceBriefing();
 show('dashboard');
-setInterval(() => { if (state.screen === 'dashboard') renderDashboard(); }, 15000); // 15s poll as fallback
+setInterval(() => {
+  if (state.screen === 'dashboard') renderDashboard().catch(reportError);
+  if (state.screen === 'inventory') renderInventory().catch(reportError);
+  if (state.screen === 'audit') renderAudit().catch(reportError);
+  syncReports();
+}, 8000);

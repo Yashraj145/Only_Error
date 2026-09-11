@@ -44,14 +44,19 @@
   </header>
 
   <main id="app">
+    <p id="connection-status" role="status" aria-live="polite"></p>
     <!-- DASHBOARD -->
     <section id="screen-dashboard" class="screen active">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
         <span class="dim" style="font-size:12px; font-weight:600;">🗺️ GIS Incident Command & Multi-Agency Supply Corridors</span>
-        <button id="btn-toggle-corridors" class="secondary" style="font-size:11px; padding:3px 8px; border-color:#38bdf8; color:#38bdf8;">🚚 Supply Corridors: ON</button>
+        <div style="display:flex; gap:8px;">
+          <button id="reset-demo" class="secondary" style="font-size:11px; padding:3px 8px;">Reset Demo</button>
+          <button id="btn-toggle-corridors" class="secondary" style="font-size:11px; padding:3px 8px; border-color:#38bdf8; color:#38bdf8;">🚚 Supply Corridors: ON</button>
+        </div>
       </div>
       <div id="map-container" style="height:320px;border-radius:12px;overflow:hidden;margin-bottom:16px;"></div>
       <div id="status-strip" class="strip"></div>
+      <div id="critical-needs"></div>
       <div id="forecast-alerts"></div>
       <div id="dup-banner"></div>
       <div id="proposal-card"></div>
@@ -73,17 +78,31 @@
     <section id="screen-report" class="screen">
       <div class="report-layout">
         <div>
-          <h2>📋 Standard Report Form</h2>
+          <h2>📋 Zone Report (Standard Form)</h2>
           <form id="report-form">
-            <label>Zone name<input name="name" required placeholder="Ward 9" /></label>
-            <label>Location / landmark<input name="location" required placeholder="Ward 9, West District" /></label>
-            <label>Population affected<input name="population_affected" type="number" min="0" value="500" /></label>
-            <fieldset><legend>Resource needs</legend>
-              <div id="need-chips" class="chips"></div>
-            </fieldset>
-            <label class="check"><input type="checkbox" name="rescue_needed" /> Rescue needed (hard override → critical)</label>
-            <label class="check"><input type="checkbox" name="urgency_high" /> Reporter flags situation urgent (×1.2)</label>
-            <button type="submit">Submit report</button>
+            <p id="report-step-label">Step 1 of 4 · Zone details</p>
+            <div data-report-step="0">
+              <label>Zone name<input name="name" required placeholder="Ward 9" /></label>
+              <label>Location / landmark<input name="location" required placeholder="Ward 9, West District" /></label>
+              <label>Population affected<input name="population_affected" type="number" min="0" value="500" /></label>
+              <button id="use-location" type="button" class="secondary" style="margin-top:6px;">Use my location</button>
+              <p class="dim" style="font-size:12px; margin-top:4px;">You can also type a landmark or district manually.</p>
+            </div>
+            <div data-report-step="1" hidden>
+              <fieldset><legend>Resource needs</legend>
+                <div id="need-chips" class="chips"></div>
+              </fieldset>
+            </div>
+            <div data-report-step="2" hidden>
+              <label class="check"><input type="checkbox" name="rescue_needed" /> Rescue needed (hard override → critical)</label>
+              <label class="check"><input type="checkbox" name="urgency_high" /> Reporter flags situation urgent (×1.2)</label>
+            </div>
+            <div data-report-step="3" id="report-review" hidden></div>
+            <div class="row" style="margin-top:12px;">
+              <button type="button" id="report-back" class="secondary" hidden>Back</button>
+              <button type="button" id="report-next">Next</button>
+              <button type="submit" id="report-submit" hidden>Confirm Report</button>
+            </div>
             <div id="report-result"></div>
           </form>
         </div>
@@ -215,6 +234,8 @@
       <div class="filters">
         <input id="audit-zone" placeholder="filter by zone id (e.g. Z2)" />
         <input id="audit-actor" placeholder="filter by actor" />
+        <input id="audit-action" placeholder="action (e.g. REALLOCATION_CHECK)" />
+        <input id="audit-resource" placeholder="resource (e.g. RES1)" />
         <button id="audit-refresh">Refresh</button>
       </div>
       <ul id="audit-list" class="feed"></ul>

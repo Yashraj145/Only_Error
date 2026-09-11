@@ -15,6 +15,10 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
+button:disabled { opacity: .55; cursor: wait; }
+input { max-width: 100%; min-width: 0; }
+summary { cursor: pointer; }
 
 body { 
   margin: 0; 
