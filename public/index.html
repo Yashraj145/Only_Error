@@ -4,53 +4,150 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Only_Error — Relief Resource Coordinator</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0f1420">
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="brand">🆘 Only_Error <span>Relief Coordinator</span></div>
-    <nav id="nav">
-      <button data-screen="dashboard" class="active">Dashboard</button>
-      <button data-screen="report">Report</button>
-      <button data-screen="inventory">Inventory</button>
-      <button data-screen="audit">Audit Log</button>
-    </nav>
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <button id="btn-demo-tour" style="background:linear-gradient(135deg, #7c3aed, #4f46e5); border:0; color:#fff; border-radius:8px; padding:6px 14px; cursor:pointer; font-weight:700; font-size:13px; box-shadow:0 2px 8px rgba(124,58,237,0.4); display:inline-flex; align-items:center; gap:6px;">⚡ 1-Click Demo Guide</button>
+      <nav id="nav">
+        <button data-screen="dashboard" class="active">Dashboard</button>
+        <button data-screen="report">Report</button>
+        <button data-screen="inventory">Inventory</button>
+        <button data-screen="sitrep">SITREP</button>
+        <button data-screen="simulation">War Room</button>
+        <button data-screen="audit">Audit Log</button>
+      </nav>
+    </div>
   </header>
 
   <main id="app">
     <!-- DASHBOARD -->
     <section id="screen-dashboard" class="screen active">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <span class="dim" style="font-size:12px; font-weight:600;">🗺️ GIS Incident Command & Multi-Agency Supply Corridors</span>
+        <button id="btn-toggle-corridors" class="secondary" style="font-size:11px; padding:3px 8px; border-color:#38bdf8; color:#38bdf8;">🚚 Supply Corridors: ON</button>
+      </div>
+      <div id="map-container" style="height:320px;border-radius:12px;overflow:hidden;margin-bottom:16px;"></div>
       <div id="status-strip" class="strip"></div>
+      <div id="forecast-alerts"></div>
       <div id="dup-banner"></div>
       <div id="proposal-card"></div>
-      <h2>Priority-ranked zone list</h2>
+      
+      <h2>Priority-ranked zones</h2>
       <div id="zone-list" class="cards"></div>
-      <h2>Inventory summary</h2>
+      
+      <h2>🤝 Inter-Agency Coordination & De-confliction</h2>
+      <div id="agency-coordination" class="cards" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px; margin-bottom:16px;"></div>
+
+      <h2>Resource inventory <span id="depletion-indicators" class="dim"></span></h2>
       <div id="inventory-summary" class="cards"></div>
+      
       <h2>Activity feed <button class="link" data-screen="audit">View all →</button></h2>
       <ul id="activity-feed" class="feed"></ul>
     </section>
 
-    <!-- REPORT -->
+    <!-- REPORT (with NLP chat) -->
     <section id="screen-report" class="screen">
-      <h2>Zone report</h2>
-      <form id="report-form">
-        <label>Zone name<input name="name" required placeholder="Ward 9" /></label>
-        <label>Location / landmark<input name="location" required placeholder="Ward 9, West District" /></label>
-        <label>Population affected<input name="population_affected" type="number" min="0" value="500" /></label>
-        <fieldset><legend>Resource needs</legend>
-          <div id="need-chips" class="chips"></div>
-        </fieldset>
-        <label class="check"><input type="checkbox" name="rescue_needed" /> Rescue needed (hard override → critical)</label>
-        <label class="check"><input type="checkbox" name="urgency_high" /> Reporter flags situation urgent (×1.2)</label>
-        <button type="submit">Submit report</button>
-        <div id="report-result"></div>
-      </form>
+      <div class="report-layout">
+        <div>
+          <h2>📋 Standard Report Form</h2>
+          <form id="report-form">
+            <label>Zone name<input name="name" required placeholder="Ward 9" /></label>
+            <label>Location / landmark<input name="location" required placeholder="Ward 9, West District" /></label>
+            <label>Population affected<input name="population_affected" type="number" min="0" value="500" /></label>
+            <fieldset><legend>Resource needs</legend>
+              <div id="need-chips" class="chips"></div>
+            </fieldset>
+            <label class="check"><input type="checkbox" name="rescue_needed" /> Rescue needed (hard override → critical)</label>
+            <label class="check"><input type="checkbox" name="urgency_high" /> Reporter flags situation urgent (×1.2)</label>
+            <button type="submit">Submit report</button>
+            <div id="report-result"></div>
+          </form>
+        </div>
+        <div>
+          <h2>💬 Quick Report & 🎙️ AI Voice Dispatch</h2>
+          
+          <div class="voice-panel" style="background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+              <b>🎙️ Emergency Audio & Voice AI Intake</b>
+              <span class="dim" style="font-size:12px;">Librosa: MFCC, Pitch, Energy, Speech Rate</span>
+            </div>
+            
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; align-items:center;">
+              <button id="btn-record-mic" type="button" class="mic-btn" style="background:#ef4444; border:0; color:#fff; padding:8px 16px; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; transition:all 0.2s ease;">
+                <span class="rec-dot" style="display:inline-block; width:10px; height:10px; border-radius:50%; background:#fff;"></span>
+                <span id="rec-label">Hold / Click to Record Voice</span>
+              </button>
+              
+              <label class="btn-file-upload" style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; background:var(--card-hover, #232d42); padding:8px 14px; border-radius:8px; border:1px solid var(--line); font-size:13px; font-weight:600;">
+                📁 Upload Audio Call
+                <input id="audio-file-input" type="file" accept="audio/*" style="display:none;" />
+              </label>
+            </div>
+            
+            <div style="margin-bottom:12px;">
+              <span style="font-size:12px; margin-bottom:6px; display:block;" class="dim">⚡ 1-Click Radio Dispatch Presets (Instant Demo):</span>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button type="button" class="secondary btn-sample" data-sample="critical_mayday.wav" style="font-size:12px; padding:5px 10px; border-color:#ef4444;">🌊 Mayday: Ward 9 Flood</button>
+                <button type="button" class="secondary btn-sample" data-sample="urgent_earthquake.wav" style="font-size:12px; padding:5px 10px; border-color:#f97316;">🏢 Urgent: Sector 4 Collapse</button>
+                <button type="button" class="secondary btn-sample" data-sample="moderate_sitrep.wav" style="font-size:12px; padding:5px 10px; border-color:#eab308;">📦 Routine: Ward 11 Sitrep</button>
+              </div>
+            </div>
+
+            <!-- Real-time Acoustic Feature HUD -->
+            <div id="acoustic-hud" class="acoustic-hud hidden" style="background:rgba(15,20,32,0.9); border:1px solid var(--line); border-radius:8px; padding:12px; margin-top:10px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <b style="color:var(--accent); font-size:13px;">🧠 Librosa Acoustic Telemetry & Urgency Profile</b>
+                <span id="hud-confidence" class="badge" style="background:rgba(59,130,246,0.2); color:#60a5fa;">Confidence: --%</span>
+              </div>
+              <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap:8px; font-size:11px; margin-bottom:8px;">
+                <div class="hud-item" style="background:var(--bg); padding:6px 8px; border-radius:6px;">
+                  <span class="dim">Distress Index</span>
+                  <div id="hud-distress" style="font-size:14px; font-weight:bold; color:#ef4444;">-- / 100</div>
+                </div>
+                <div class="hud-item" style="background:var(--bg); padding:6px 8px; border-radius:6px;">
+                  <span class="dim">Pitch (F0)</span>
+                  <div id="hud-pitch" style="font-size:14px; font-weight:bold;">-- Hz</div>
+                </div>
+                <div class="hud-item" style="background:var(--bg); padding:6px 8px; border-radius:6px;">
+                  <span class="dim">RMS Energy</span>
+                  <div id="hud-energy" style="font-size:14px; font-weight:bold;">--</div>
+                </div>
+                <div class="hud-item" style="background:var(--bg); padding:6px 8px; border-radius:6px;">
+                  <span class="dim">Speech Rate</span>
+                  <div id="hud-rate" style="font-size:14px; font-weight:bold;">-- onsets/s</div>
+                </div>
+              </div>
+              <div>
+                <span class="dim" style="font-size:11px; display:block; margin-bottom:4px;">MFCC Timbre Spectral Profile (13 Coefficients):</span>
+                <div id="hud-mfcc-bars" style="display:flex; height:24px; gap:3px; align-items:flex-end; background:var(--bg); padding:3px; border-radius:4px;"></div>
+              </div>
+              <div id="hud-triage-summary" style="margin-top:8px; font-size:12px; color:#93c5fa; font-weight:500;"></div>
+            </div>
+          </div>
+
+          <div class="chat-container">
+            <div id="chat-messages" class="chat-messages">
+              <div class="chat-msg system">Type a report or speak via radio dispatch. The system will extract entities, calculate acoustic distress with Librosa, and rank priority automatically.</div>
+            </div>
+            <div class="chat-input-row">
+              <input id="chat-input" type="text" placeholder="e.g. Flooding in Sector 5, 200 families stranded, need food urgently" />
+              <button id="chat-send">Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- INVENTORY -->
     <section id="screen-inventory" class="screen">
-      <h2>Resource inventory</h2>
+      <h2>Resource Inventory</h2>
       <div id="inventory-list" class="cards"></div>
       <h3>Add resource</h3>
       <form id="inventory-form">
@@ -63,9 +160,41 @@
       </form>
     </section>
 
+    <!-- SITREP -->
+    <section id="screen-sitrep" class="screen">
+      <div class="sitrep-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <h2>📊 Situation Report (SITREP)</h2>
+        <div style="display:flex; gap:8px;">
+          <button id="sitrep-voice-briefing" class="secondary" style="border-color:#38bdf8; color:#38bdf8; font-weight:600;">🎙️ Play Voice Briefing</button>
+          <button id="sitrep-export-md" class="secondary">📥 Export (.md)</button>
+          <button id="sitrep-refresh" class="secondary">🔄 Refresh</button>
+        </div>
+      </div>
+      <div id="sitrep-content"></div>
+    </section>
+
+    <!-- WAR ROOM -->
+    <section id="screen-simulation" class="screen">
+      <h2>🎮 War Room — Disaster Simulation</h2>
+      <p class="dim">Run autonomous disaster scenarios and watch the system respond in real-time.</p>
+      <div id="sim-controls" class="sim-controls">
+        <select id="sim-scenario"></select>
+        <div class="sim-speed">
+          <label>Speed:</label>
+          <button class="speed-btn" data-speed="1">1×</button>
+          <button class="speed-btn active" data-speed="5">5×</button>
+          <button class="speed-btn" data-speed="10">10×</button>
+        </div>
+        <button id="sim-start" class="sim-start">▶ Launch Simulation</button>
+        <button id="sim-stop" class="secondary" disabled>⏹ Stop</button>
+      </div>
+      <div id="sim-status" class="sim-status"></div>
+      <ul id="sim-log" class="feed"></ul>
+    </section>
+
     <!-- AUDIT LOG -->
     <section id="screen-audit" class="screen">
-      <h2>Audit log</h2>
+      <h2>Audit Log</h2>
       <div class="filters">
         <input id="audit-zone" placeholder="filter by zone id (e.g. Z2)" />
         <input id="audit-actor" placeholder="filter by actor" />
@@ -74,15 +203,77 @@
       <ul id="audit-list" class="feed"></ul>
     </section>
 
-    <!-- ZONE DETAIL (modal) -->
+    <!-- ZONE DETAIL MODAL -->
     <div id="zone-modal" class="modal hidden">
       <div class="modal-card">
         <button class="close" id="zone-modal-close">✕</button>
         <div id="zone-detail"></div>
       </div>
     </div>
+
+    <!-- DEMO GUIDE MODAL -->
+    <div id="demo-modal" class="modal hidden">
+      <div class="modal-card" style="max-width: 680px;">
+        <button class="close" id="demo-modal-close">✕</button>
+        <h3 style="margin-top:0; color:#c084fc;">⚡ 1-Click Live Demo Assistant (§12 Script)</h3>
+        <p class="dim">Execute the full end-to-end hackathon demonstration sequentially. Each step runs real multi-agent pipeline actions with live explanations.</p>
+        <div id="demo-step-list" style="display:grid; gap:10px; margin-top:16px;">
+          <div class="card" style="border-left-color:#8b5cf6; background:rgba(139,92,246,0.08);">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <b>🎙️ Live Feature: AI Voice Radio Distress Dispatch</b>
+              <span class="badge" style="background:#7c3aed; color:#fff;">Librosa AI</span>
+            </div>
+            <div class="dim" style="margin-top:4px;">Simulates receiving a high-distress Mayday radio call. Librosa extracts MFCC, Pitch, Energy & Speech Rate; automatically flags critical panic override & triggers re-allocation!</div>
+            <button onclick="runVoiceDemo()" style="margin-top:8px; background:linear-gradient(135deg, #7c3aed, #6366f1); color:#fff; border:0; padding:6px 12px; border-radius:6px; font-weight:bold; cursor:pointer;">▶ Test Voice AI Dispatch</button>
+          </div>
+          <div class="card" style="border-left-color:#3b82f6;">
+            <b>Step 1: Baseline Reset</b>
+            <div class="dim">Resets to 4 mixed-tier zones. Ward 3 holds scarce 12 medical kits.</div>
+            <button onclick="runDemoStep(1)" style="margin-top:8px;">▶ 1. Reset Baseline State</button>
+          </div>
+          <div class="card" style="border-left-color:#ef4444;">
+            <b>Step 2: Submit Critical Ward 9 Report</b>
+            <div class="dim">New zone with trapped residents triggers hard rescue override → critical. Reallocation agent proposes diverting 12 medical kits from Ward 3.</div>
+            <button onclick="runDemoStep(2)" style="margin-top:8px;">▶ 2. Ingest Ward 9 (Rescue Override)</button>
+          </div>
+          <div class="card" style="border-left-color:#a855f7;">
+            <b>Step 3: Accept Re-allocation Proposal</b>
+            <div class="dim">Coordinator accepts diversion. Stock re-targets to Ward 9 without stock loss. Inventory decrements upon delivery confirmation.</div>
+            <button onclick="runDemoStep(3)" style="margin-top:8px;">▶ 3. Accept & Deliver Diversion</button>
+          </div>
+          <div class="card" style="border-left-color:#f97316;">
+            <b>Step 4: Surge Ward 7 Population (x2)</b>
+            <div class="dim">Ward 7 population doubles (800 → 1600). Severity score surges live; reallocation check evaluates and logs provable no-op.</div>
+            <button onclick="runDemoStep(4)" style="margin-top:8px;">▶ 4. Surge Ward 7 Population</button>
+          </div>
+          <div class="card" style="border-left-color:#eab308;">
+            <b>Step 5: Resubmit Ward 3 (Duplicate Report Detection)</b>
+            <div class="dim">Duplicate report detector flags match score ≥ 3. Dashboard displays merge/dismiss review banner.</div>
+            <button onclick="runDemoStep(5)" style="margin-top:8px;">▶ 5. Resubmit Ward 3 (Duplicate Check)</button>
+          </div>
+          <div class="card" style="border-left-color:#ec4899;">
+            <b>Step 6: Depleted Stock Claim (Honest Shortfall)</b>
+            <div class="dim">Ward 14 claims medical supplies with empty inventory. System issues partial allocation and honestly audits the unmet gap.</div>
+            <button onclick="runDemoStep(6)" style="margin-top:8px;">▶ 6. Claim Depleted Medical Stock</button>
+          </div>
+          <div class="card" style="border-left-color:#10b981;">
+            <b>Step 7: Audit Trace & SITREP Inspection</b>
+            <div class="dim">Navigates to SITREP & Audit Log verifying complete traceability across all responding agencies.</div>
+            <button onclick="runDemoStep(7)" style="margin-top:8px;">▶ 7. Verify SITREP & Audit Log</button>
+          </div>
+        </div>
+        <div id="demo-output" class="banner hidden" style="margin-top:16px;"></div>
+      </div>
+    </div>
   </main>
 
   <script type="module" src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW reg failed', err));
+      });
+    }
+  </script>
 </body>
 </html>

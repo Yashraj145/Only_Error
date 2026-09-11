@@ -1,0 +1,10 @@
+{
+  "name": "Only_Error Relief Coordinator",
+  "short_name": "Relief HQ",
+  "description": "Multi-agent disaster response coordination system",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0e1a",
+  "theme_color": "#0a0e1a",
+  "icons": []
+}

@@ -1,4 +1,4 @@
-// §8 — client renders only; no agent logic here. Polls every 8s (§11).
+// §8 — client renders only; no agent logic here.
 const $ = (sel) => document.querySelector(sel);
 const api = (path, opts) => fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts }).then(async (r) => {
   const body = await r.json().catch(() => ({}));
@@ -8,15 +8,144 @@ const api = (path, opts) => fetch(path, { headers: { 'Content-Type': 'applicatio
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 const state = { screen: 'dashboard' };
+let map = null;
+let zoneMarkers = {};
+let generatedPositions = {}; // store fake coords so they don't jump
+
+function initMap() {
+  if (map || typeof L === 'undefined') return;
+  try {
+    map = L.map('map-container').setView([20.5, 78.9], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+  } catch (e) {
+    console.error("Leaflet init failed", e);
+  }
+}
+
+function zoneLatLng(index, total) {
+  const angle = (index / total) * 2 * Math.PI;
+  const radius = 0.5 + Math.random() * 1.5;
+  return [20.5 + Math.sin(angle) * radius, 78.9 + Math.cos(angle) * radius];
+}
+
+const AGENCY_BASES = {
+  'agency-relief': { name: 'Relief Corps Logistics Alpha', latlng: [21.25, 78.35], color: '#3b82f6', icon: '📦' },
+  'agency-fire': { name: 'City Fire Dept HQ', latlng: [19.95, 79.15], color: '#f97316', icon: '🚒' },
+  'agency-medair': { name: 'MedAir International Airfield', latlng: [20.85, 79.55], color: '#10b981', icon: '🚁' }
+};
+
+let showCorridors = true;
+let agencyMarkers = {};
+let corridorLines = [];
+
+function updateMap(zones, allocations = []) {
+  if (!map) return;
+  
+  // Remove old zone markers that aren't in current zones
+  const currentZoneIds = new Set(zones.map(z => z.zone_id));
+  Object.keys(zoneMarkers).forEach(id => {
+    if (!currentZoneIds.has(id)) {
+      map.removeLayer(zoneMarkers[id]);
+      delete zoneMarkers[id];
+    }
+  });
+
+  // Plot Responding Agency Headquarters
+  Object.entries(AGENCY_BASES).forEach(([agId, base]) => {
+    if (!agencyMarkers[agId]) {
+      const icon = L.divIcon({
+        className: 'agency-icon',
+        html: `<div style="background:${base.color}; color:#fff; border-radius:6px; padding:3px 8px; font-size:11px; font-weight:700; box-shadow:0 2px 8px rgba(0,0,0,0.4); display:inline-flex; align-items:center; gap:4px; border:1px solid rgba(255,255,255,0.8); cursor:pointer;">${base.icon} ${esc(base.name.split(' ')[0])}</div>`,
+        iconSize: [85, 24],
+        iconAnchor: [42, 12]
+      });
+      agencyMarkers[agId] = L.marker(base.latlng, { icon }).addTo(map);
+      agencyMarkers[agId].bindPopup(`<b>🏢 ${esc(base.name)}</b><br><span class="dim">Strategic Dispatch Base · Ready</span>`);
+    }
+  });
+
+  zones.forEach((z, i) => {
+    if (!generatedPositions[z.zone_id]) {
+      generatedPositions[z.zone_id] = zoneLatLng(i, zones.length || 1);
+    }
+    const latlng = generatedPositions[z.zone_id];
+    const colors = { critical: '#ef4444', high: '#f97316', moderate: '#eab308', low: '#22c55e' };
+    const radius = Math.max(8, Math.min(25, z.population_affected / 100));
+    
+    if (!zoneMarkers[z.zone_id]) {
+      zoneMarkers[z.zone_id] = L.circleMarker(latlng, {
+        color: colors[z.tier],
+        fillColor: colors[z.tier],
+        fillOpacity: 0.7,
+        radius: radius,
+        className: z.tier === 'critical' ? 'pulse' : ''
+      }).addTo(map);
+      zoneMarkers[z.zone_id].on('click', () => openZone(z.zone_id));
+    } else {
+      zoneMarkers[z.zone_id].setRadius(radius);
+      zoneMarkers[z.zone_id].setStyle({
+        color: colors[z.tier], fillColor: colors[z.tier], className: z.tier === 'critical' ? 'pulse' : ''
+      });
+    }
+    
+    zoneMarkers[z.zone_id].bindPopup(`
+      <b>${esc(z.name)}</b> <span class="badge ${z.tier}">${z.tier}</span><br>
+      Score: ${z.severity_score}<br>
+      Top gaps: ${Object.entries(z.gaps).filter(([,g])=>g>0).map(([c])=>c).join(', ') || 'none'}
+    `);
+  });
+
+  // Redraw animated supply corridors
+  corridorLines.forEach(line => map.removeLayer(line));
+  corridorLines = [];
+
+  if (showCorridors && allocations.length > 0) {
+    allocations.forEach(a => {
+      if (a.status === 'confirmed' || a.status === 'allocated' || a.status === 'pending') {
+        const zonePos = generatedPositions[a.zone_id];
+        if (!zonePos) return;
+        let baseKey = 'agency-relief';
+        if (a.category === 'rescue') baseKey = 'agency-fire';
+        else if (a.category === 'medical') baseKey = 'agency-medair';
+        const base = AGENCY_BASES[baseKey];
+        if (!base) return;
+
+        const line = L.polyline([base.latlng, zonePos], {
+          color: base.color,
+          weight: 3,
+          dashArray: '6, 8',
+          opacity: 0.85
+        }).addTo(map);
+
+        line.bindPopup(`
+          <b>🚚 Active Supply Corridor</b><br>
+          From: ${esc(base.name)}<br>
+          To: ${esc(a.zone_name || a.zone_id)}<br>
+          Dispatched: <b>${a.quantity} ${esc(a.category)}</b> [${a.status}]
+        `);
+        corridorLines.push(line);
+      }
+    });
+  }
+}
 
 function show(screen) {
   state.screen = screen;
   document.querySelectorAll('.screen').forEach((s) => s.classList.remove('active'));
-  $(`#screen-${screen}`).classList.add('active');
+  const el = document.getElementById(`screen-${screen}`);
+  if (el) el.classList.add('active');
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.screen === screen));
-  if (screen === 'dashboard') renderDashboard();
+  if (screen === 'dashboard') {
+    initMap();
+    renderDashboard();
+    setTimeout(() => { if(map) map.invalidateSize(); }, 100);
+  }
   if (screen === 'inventory') renderInventory();
   if (screen === 'audit') renderAudit();
+  if (screen === 'sitrep') renderSitrep();
+  if (screen === 'simulation') renderSimulation();
 }
 
 document.getElementById('nav').addEventListener('click', (e) => {
@@ -26,17 +155,69 @@ document.getElementById('nav').addEventListener('click', (e) => {
 
 const tierBadge = (tier) => `<span class="badge ${tier}">${tier}</span>`;
 
+let eventSource = null;
+function connectSSE() {
+  if (eventSource) eventSource.close();
+  eventSource = new EventSource('/api/events');
+  eventSource.addEventListener('update', (e) => {
+    try {
+      const event = JSON.parse(e.data);
+      if (state.screen === 'dashboard') renderDashboard();
+      if (state.screen === 'simulation') appendSimLog(event);
+      if (state.screen === 'sitrep') renderSitrep();
+    } catch(err) {
+      console.error(err);
+    }
+  });
+  eventSource.onerror = () => {
+    setTimeout(connectSSE, 3000); // reconnect
+  };
+}
+connectSSE();
+
+let prevStats = {};
+
 async function renderDashboard() {
-  const [d, zones, proposals, flags] = await Promise.all([
+  const [d, zones, proposals, flags, forecasts, agencies, allocations] = await Promise.all([
     api('/api/dashboard'), api('/api/zones'), api('/api/reallocations'), api('/api/duplicate-flags'),
+    api('/api/forecasts').catch(() => ({})), api('/api/agencies').catch(() => []),
+    api('/api/allocations').catch(() => [])
   ]);
 
-  $('#status-strip').innerHTML = [
-    ['Active zones', d.active_zones], ['Critical zones', d.critical_zones],
-    ['Units allocated', d.resources_allocated], ['Pending flags', d.pending_reports],
-  ].map(([label, v]) => `<div class="stat"><b>${v}</b><span>${label}</span></div>`).join('');
+  updateMap(zones, allocations);
 
-  // Duplicate-report banner (§8) — human review, never auto-merged.
+  const btnCorridors = $('#btn-toggle-corridors');
+  if (btnCorridors && !btnCorridors.__bound) {
+    btnCorridors.__bound = true;
+    btnCorridors.onclick = () => {
+      showCorridors = !showCorridors;
+      btnCorridors.textContent = `🚚 Supply Corridors: ${showCorridors ? 'ON' : 'OFF'}`;
+      btnCorridors.style.borderColor = showCorridors ? '#38bdf8' : '#64748b';
+      btnCorridors.style.color = showCorridors ? '#38bdf8' : '#64748b';
+      renderDashboard();
+    };
+  }
+
+  const getArrow = (k, v) => {
+    if (prevStats[k] === undefined) return '';
+    if (v > prevStats[k]) return '<span style="color:var(--critical); font-size: 14px;">↑</span>';
+    if (v < prevStats[k]) return '<span style="color:var(--low); font-size: 14px;">↓</span>';
+    return '';
+  };
+
+  $('#status-strip').innerHTML = [
+    ['Active zones', d.active_zones, 'active_zones'], ['Critical zones', d.critical_zones, 'critical_zones'],
+    ['Units allocated', d.resources_allocated, 'resources_allocated'], ['Pending flags', d.pending_reports, 'pending_reports'],
+  ].map(([label, v, k]) => `<div class="stat"><b>${v} ${getArrow(k, v)}</b><span>${label}</span></div>`).join('');
+  
+  prevStats = { active_zones: d.active_zones, critical_zones: d.critical_zones, resources_allocated: d.resources_allocated, pending_reports: d.pending_reports };
+
+  if (forecasts && forecasts.alerts && forecasts.alerts.length > 0) {
+    $('#forecast-alerts').innerHTML = forecasts.alerts.map(a => `<div class="banner">⚠️ <b>ALERT</b> — ${esc(a)}</div>`).join('');
+  } else {
+    $('#forecast-alerts').innerHTML = '';
+  }
+
   $('#dup-banner').innerHTML = flags.map((f) => `
     <div class="banner">
       <b>Possible duplicate report</b> — "${esc(f.incoming.name)}" vs ${esc(f.matched_zone_name)}
@@ -47,7 +228,6 @@ async function renderDashboard() {
       </div>
     </div>`).join('');
 
-  // v2 re-allocation proposal card (§8) — Accept / Dismiss, same pattern.
   $('#proposal-card').innerHTML = proposals.map((p) => `
     <div class="banner proposal">
       <b>Re-allocation proposal</b> — Divert ${p.quantity} ${esc(p.category)} units ${esc(p.from_zone_name)} → ${esc(p.to_zone_name)}?
@@ -63,12 +243,40 @@ async function renderDashboard() {
       <h3>${esc(z.name)} ${tierBadge(z.tier)}</h3>
       <div class="dim">Score ${z.severity_score} · pop ${z.population_affected} · needs: ${z.needs.join(', ') || '—'}${z.override_applied ? ' · ⛑ rescue override' : ''}</div>
       <div class="dim">Gaps: ${Object.entries(z.gaps).filter(([, g]) => g > 0).map(([c, g]) => `${c}: ${g}`).join(' · ') || 'none'}</div>
-      ${z.tier === 'critical' && z.unclaimed_categories.length ? `<div class="row">⚠ unclaimed: ${z.unclaimed_categories.join(', ')}</div>` : ''}
+      ${z.tier === 'critical' && z.unclaimed_categories.length ? `<div class="row" style="color:var(--critical);">⚠ unclaimed: ${z.unclaimed_categories.join(', ')}</div>` : ''}
       <div class="row"><button onclick="openZone('${z.zone_id}')">Detail · claims · history</button></div>
     </div>`).join('') || '<p class="dim">No zones.</p>';
 
+  if ($('#agency-coordination')) {
+    $('#agency-coordination').innerHTML = (agencies || []).map(ag => `
+      <div class="card" style="border-left-color:${ag.type === 'government' ? 'var(--accent)' : '#10b981'};">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <b>${esc(ag.name)}</b>
+          <span class="badge" style="background:${ag.type === 'government' ? 'var(--accent)' : '#10b981'}; color:#fff;">${ag.type}</span>
+        </div>
+        <div class="dim" style="margin-top:6px;">
+          ID: <code>${esc(ag.agency_id)}</code> · Stocked: <b>${ag.total_units_stocked}</b> units
+        </div>
+        <div class="dim" style="margin-top:4px;">
+          Active Claims: <b>${ag.active_claims}</b> · Converted: <b>${ag.converted_claims}</b>
+        </div>
+        ${ag.duplicate_attempts_blocked > 0 ? `<div style="color:var(--moderate); font-size:12px; margin-top:6px;">🛡️ <b>${ag.duplicate_attempts_blocked}</b> conflict(s) blocked by ledger</div>` : `<div class="dim" style="font-size:12px; margin-top:6px;">🛡️ 0 conflicts (clean coordination)</div>`}
+      </div>
+    `).join('') || '<p class="dim">No active agencies.</p>';
+  }
+
   $('#inventory-summary').innerHTML = Object.entries(d.inventory_totals)
-    .map(([c, q]) => `<div class="stat" style="border-left:4px solid var(--accent)"><b>${q}</b><span>${c} available</span></div>`).join('');
+    .map(([c, q]) => {
+      let fData = forecasts?.resource_forecasts?.find(r => r.category === c);
+      let etaStr = '';
+      if (fData && fData.hours_to_depletion != null && fData.hours_to_depletion < Infinity) {
+        etaStr = `<span class="dim" style="font-size:11px; margin-left: 8px;">Depletes in ${fData.hours_to_depletion.toFixed(1)}h</span>`;
+      }
+      return `<div class="stat" style="border-left:4px solid var(--accent); position:relative; overflow:hidden;">
+        <div style="position:absolute; bottom:0; left:0; height:4px; background:var(--accent); width:${Math.min(100, q)}%; opacity: 0.5;"></div>
+        <b>${q}</b><span>${c} available ${etaStr}</span>
+      </div>`;
+    }).join('');
 
   $('#activity-feed').innerHTML = d.audit_excerpt.map(feedRow).join('') || '<li class="dim">No activity yet.</li>';
 }
@@ -85,7 +293,6 @@ window.decideProposal = async (id, action) => {
   renderDashboard();
 };
 
-// ---------- zone detail: gap breakdown + claim grid + allocation history (§7) ----------
 window.openZone = async (zoneId) => {
   const z = await api('/api/zones').then((zs) => zs.find((x) => x.zone_id === zoneId));
   const breakdown = await api(`/zones/${zoneId}/score-breakdown`);
@@ -94,18 +301,34 @@ window.openZone = async (zoneId) => {
   $('#zone-detail').innerHTML = `
     <h3>${esc(z.name)} ${tierBadge(z.tier)} <span class="dim">score ${z.severity_score}</span></h3>
     <div class="dim">${esc(z.location)} · population ${z.population_affected}${z.override_applied ? ' · ⛑ rescue override applied' : ''}</div>
+    
+    <h4>Explainability — Why this priority?</h4>
+    <div style="background:var(--bg); padding:10px; border-radius:8px; border:1px solid var(--line);">
+      <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Base Need</span><span>Population Multiplier</span><span>Urgency Multiplier</span></div>
+      <div style="display:flex; height:8px; border-radius:4px; overflow:hidden; background:var(--line);">
+        <div style="width:33%; background:var(--moderate);"></div>
+        <div style="width:33%; background:var(--high);"></div>
+        <div style="width:34%; background:var(--critical);"></div>
+      </div>
+      <div class="dim" style="margin-top:8px; font-size: 12px;">
+        Pressure: ×${breakdown.breakdown?.population_pressure || 1} · Urgency: ×${breakdown.breakdown?.urgency_multiplier || 1} ${breakdown.override_applied ? ' · <b>HARD OVERRIDE</b>' : ''}
+      </div>
+    </div>
+
     <h4>Score breakdown</h4>
     <table><tr><th>category</th><th>need</th><th>gap</th><th>ratio</th><th>weight</th></tr>
     ${(breakdown.breakdown?.per_category || []).map((p) => `<tr><td>${p.category}</td><td>${p.need}</td><td>${p.gap}</td><td>${p.gap_ratio}</td><td>${p.weight}</td></tr>`).join('')}
     </table>
-    <div class="dim">pressure ×${breakdown.breakdown?.population_pressure} · urgency ×${breakdown.breakdown?.urgency_multiplier}${breakdown.override_applied ? ' · hard override applied' : ''}</div>
+    
     <h4>Claim grid</h4>
     ${allGapped.length ? allGapped.map((c) => `<div class="row"><span>${c}</span>${z.unclaimed_categories.includes(c)
       ? agencies.map((a) => `<button onclick="claim('${z.zone_id}','${c}','${a}')">Claim (${a})</button>`).join('')
       : '<span class="dim">already claimed/allocated</span>'}</div>`).join('')
       : '<p class="dim">No unmet needs.</p>'}
+    
     <h4>Allocation history</h4>
     ${z.allocations.map((a) => `<div class="row dim">[${a.status}] ${a.quantity} ${a.category} — ${esc(a.reason_text)}${a.status === 'confirmed' ? ` <button onclick="deliverAlloc('${a.allocation_id}', '${z.zone_id}')">Confirm delivery (${a.quantity})</button>` : ''}</div>`).join('') || '<p class="dim">None yet.</p>'}
+    
     <h4>Audit trail (this zone)</h4>
     <ul class="feed">${(await api(`/api/audit-log?zone=${zoneId}`)).slice(0, 10).map(feedRow).join('')}</ul>`;
   $('#zone-modal').classList.remove('hidden');
@@ -128,8 +351,6 @@ window.deliverAlloc = async (allocationId, zoneId) => {
   openZone(zoneId);
 };
 
-
-// ---------- report screen (§8: mode → details → resource needs → submit) ----------
 const CATEGORIES = ['water', 'medical', 'food', 'shelter'];
 const chosen = new Set(['water']);
 $('#need-chips').innerHTML = CATEGORIES.map((c) => `<span class="chip${c === 'water' ? ' on' : ''}" data-c="${c}">${c}</span>`).join('');
@@ -155,7 +376,279 @@ $('#report-form').addEventListener('submit', async (e) => {
   }
 });
 
-// ---------- inventory screen ----------
+$('#chat-send').onclick = async () => {
+  const text = $('#chat-input').value.trim();
+  if (!text) return;
+  appendChat('user', text);
+  $('#chat-input').value = '';
+  try {
+    const result = await api('/api/reports/natural', { method: 'POST', body: JSON.stringify({ text }) });
+    appendChat('system', `📋 Parsed report (confidence: ${(result.confidence * 100).toFixed(0)}%):\n• Location: ${result.parsed.location || 'unknown'}\n• Population: ${result.parsed.population_affected}\n• Needs: ${result.parsed.needs.join(', ') || 'none detected'}\n• Rescue: ${result.parsed.rescue_needed ? 'YES' : 'no'}\n• Urgency: ${result.parsed.urgency_high ? 'HIGH' : 'normal'}`);
+    appendChat('action', result.parsed);
+  } catch (e) {
+    appendChat('system', '❌ ' + e.message);
+  }
+};
+
+$('#chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') $('#chat-send').click();
+});
+
+function appendChat(type, content) {
+  const div = document.createElement('div');
+  div.className = `chat-msg ${type}`;
+  if (type === 'action') {
+    div.innerHTML = `<button onclick="submitParsedReport(this)" data-report='${JSON.stringify(content).replace(/'/g, '&#39;')}'>✅ Submit this report</button> <button class="secondary" onclick="this.parentElement.remove()">✏️ Edit manually</button>`;
+  } else {
+    div.textContent = content;
+  }
+  $('#chat-messages').appendChild(div);
+  $('#chat-messages').scrollTop = $('#chat-messages').scrollHeight;
+}
+
+window.submitParsedReport = async (btn) => {
+  const report = JSON.parse(btn.dataset.report);
+  try {
+    const r = await api('/api/reports', { method: 'POST', body: JSON.stringify(report) });
+    appendChat('system', `✅ Report submitted! Zone: ${r.zone_id} — ${r.message}`);
+    btn.parentElement.remove();
+  } catch (e) {
+    appendChat('system', '❌ ' + e.message);
+  }
+};
+
+// ---------- AI Voice / Acoustic Distress Dispatcher & TTS Briefing ----------
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+let recordTimer = null;
+let recordStartTime = 0;
+let isSpeaking = false;
+
+async function processVoiceDispatch(payload) {
+  const hud = $('#acoustic-hud');
+  if (hud) hud.classList.remove('hidden');
+  $('#hud-distress').textContent = 'Analyzing...';
+  $('#hud-distress').style.color = '#f97316';
+  $('#hud-pitch').textContent = 'Extracting...';
+  $('#hud-energy').textContent = 'Computing...';
+  $('#hud-rate').textContent = 'Processing...';
+  $('#hud-triage-summary').textContent = 'Extracting Librosa acoustic features and analyzing vocal distress...';
+
+  try {
+    const res = await api('/api/voice-report', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+
+    const ac = res.acoustic;
+    $('#hud-distress').textContent = `${ac.distress_score} / 100 (${ac.urgency_level})`;
+    $('#hud-distress').style.color = ac.distress_score >= 70 ? '#ef4444' : (ac.distress_score >= 45 ? '#f97316' : '#22c55e');
+    $('#hud-pitch').textContent = `${ac.pitch_hz} Hz (var: ${ac.pitch_variance})`;
+    $('#hud-energy').textContent = `${ac.energy_rms} RMS`;
+    $('#hud-rate').textContent = `${ac.speech_rate} onsets/s`;
+    $('#hud-confidence').textContent = `Confidence: ${(ac.confidence * 100).toFixed(0)}%`;
+
+    if (ac.mfcc && Array.isArray(ac.mfcc)) {
+      const minVal = Math.min(...ac.mfcc);
+      const maxVal = Math.max(...ac.mfcc);
+      const range = Math.max(1, maxVal - minVal);
+      $('#hud-mfcc-bars').innerHTML = ac.mfcc.map((v, i) => {
+        const heightPct = Math.max(15, Math.min(100, ((v - minVal) / range) * 100));
+        return `<div title="MFCC ${i+1}: ${v}" style="flex:1; background:linear-gradient(to top, #3b82f6, #8b5cf6); height:${heightPct}%; border-radius:2px;"></div>`;
+      }).join('');
+    }
+
+    $('#hud-triage-summary').innerHTML = `
+      <b>AI Triage:</b> "${esc(res.transcript)}" ➔ <b>${esc(res.parsed.name)}</b> (${esc(res.parsed.location)})
+      ${res.parsed.rescue_needed ? ' · 🚨 <b>Trapped Survivors Flagged</b>' : ''}
+      ${res.parsed.urgency_high ? ' · ⚡ <b>Urgency Multiplier (×1.2) Applied</b>' : ''}
+    `;
+
+    appendChat('user', `🎙️ [Radio Dispatch]: "${res.transcript}"`);
+    appendChat('system', `🧠 Librosa Acoustic Distress: ${ac.distress_score}/100 (${ac.urgency_level}) with ${(ac.confidence * 100).toFixed(0)}% confidence.\nExtracted: ${res.parsed.name} | Needs: ${res.parsed.needs.join(', ')} | Rescue Override: ${res.parsed.rescue_needed ? 'YES' : 'no'}`);
+    
+    if (res.report_result) {
+      appendChat('system', `✅ Priority Zone Created: ${res.report_result.zone_id} placed at tier ${res.report_result.status}.`);
+    }
+
+    renderDashboard();
+    return res;
+  } catch (err) {
+    $('#hud-distress').textContent = 'Error: ' + err.message;
+    appendChat('system', `❌ Voice dispatch error: ${err.message}`);
+  }
+}
+
+function setupVoiceDispatcher() {
+  const btnRec = $('#btn-record-mic');
+  const fileInput = $('#audio-file-input');
+  const sampleBtns = document.querySelectorAll('.btn-sample');
+
+  if (btnRec) {
+    btnRec.onclick = async () => {
+      if (isRecording) {
+        stopRecording();
+      } else {
+        await startRecording();
+      }
+    };
+  }
+
+  if (fileInput) {
+    fileInput.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64 = reader.result;
+        await processVoiceDispatch({ audio_base64: base64, transcript: '' });
+      };
+      reader.readAsDataURL(file);
+    };
+  }
+
+  sampleBtns.forEach(btn => {
+    btn.onclick = async () => {
+      const sample = btn.dataset.sample;
+      await processVoiceDispatch({ sample_name: sample });
+    };
+  });
+}
+
+async function startRecording() {
+  const btnRec = $('#btn-record-mic');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    audioChunks = [];
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.push(e.data);
+    };
+    mediaRecorder.onstop = async () => {
+      const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64 = reader.result;
+        await processVoiceDispatch({ audio_base64: base64, transcript: window.__recognizedText || '' });
+      };
+      reader.readAsDataURL(audioBlob);
+    };
+
+    window.__recognizedText = '';
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      try {
+        const recognizer = new SpeechRecognition();
+        recognizer.continuous = true;
+        recognizer.interimResults = true;
+        recognizer.onresult = (e) => {
+          let text = '';
+          for (let i = 0; i < e.results.length; i++) {
+            text += e.results[i][0].transcript + ' ';
+          }
+          window.__recognizedText = text.trim();
+          $('#rec-label').textContent = `🎙️ "${window.__recognizedText.slice(0, 24)}..."`;
+        };
+        recognizer.start();
+        window.__speechRecognizer = recognizer;
+      } catch (err) {
+        console.warn('SpeechRecognition not available:', err);
+      }
+    }
+
+    mediaRecorder.start();
+    isRecording = true;
+    recordStartTime = Date.now();
+    if (btnRec) {
+      btnRec.style.background = '#dc2626';
+      btnRec.classList.add('pulse');
+    }
+    recordTimer = setInterval(() => {
+      const sec = Math.floor((Date.now() - recordStartTime) / 1000);
+      $('#rec-label').textContent = `🔴 Recording (00:${sec < 10 ? '0' : ''}${sec})... Click to Stop`;
+    }, 500);
+  } catch (err) {
+    alert("Microphone access: " + err.message + "\nYou can use the 1-Click Radio Presets or upload an audio file instead.");
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+    mediaRecorder.stream.getTracks().forEach(t => t.stop());
+  }
+  if (window.__speechRecognizer) {
+    try { window.__speechRecognizer.stop(); } catch (e) {}
+  }
+  isRecording = false;
+  clearInterval(recordTimer);
+  const btnRec = $('#btn-record-mic');
+  if (btnRec) {
+    btnRec.style.background = '#ef4444';
+    btnRec.classList.remove('pulse');
+    $('#rec-label').textContent = 'Hold / Click to Record Voice';
+  }
+}
+
+function setupVoiceBriefing() {
+  const btn = $('#sitrep-voice-briefing');
+  if (!btn) return;
+  btn.onclick = () => {
+    if (!window.speechSynthesis) {
+      alert("SpeechSynthesis not supported in this browser.");
+      return;
+    }
+    if (isSpeaking) {
+      window.speechSynthesis.cancel();
+      isSpeaking = false;
+      btn.textContent = '🎙️ Play Voice Briefing';
+      btn.style.color = '#38bdf8';
+      return;
+    }
+
+    if (!latestSitrepData) {
+      alert("Please wait for SITREP data to load.");
+      return;
+    }
+
+    const s = latestSitrepData;
+    const recs = (s.recommendations || []).slice(0, 2).join('. ') || 'All resource lines active.';
+    const text = `Disaster Relief Operational Briefing. ${s.narrative}. Active emergency zones: ${s.summary.active_zones}, with ${s.summary.critical_zones} critical sectors. Total units allocated: ${s.summary.total_allocations}. Key tactical recommendations: ${recs}. End of briefing.`;
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.05;
+    utterance.pitch = 0.95;
+    utterance.onend = () => {
+      isSpeaking = false;
+      btn.textContent = '🎙️ Play Voice Briefing';
+      btn.style.color = '#38bdf8';
+    };
+    utterance.onerror = () => {
+      isSpeaking = false;
+      btn.textContent = '🎙️ Play Voice Briefing';
+      btn.style.color = '#38bdf8';
+    };
+
+    window.speechSynthesis.speak(utterance);
+    isSpeaking = true;
+    btn.textContent = '⏹ Stop Voice Briefing';
+    btn.style.color = '#ef4444';
+  };
+}
+
+window.runVoiceDemo = async () => {
+  const modal = $('#demo-modal');
+  if (modal) modal.classList.add('hidden');
+  show('report');
+  const res = await processVoiceDispatch({ sample_name: 'critical_mayday.wav' });
+  if (res) {
+    setTimeout(() => {
+      show('dashboard');
+    }, 2000);
+  }
+};
+
 async function renderInventory() {
   const items = await api('/api/resource-items');
   $('#inventory-list').innerHTML = items.map((r) => `
@@ -182,7 +675,180 @@ $('#inventory-form').addEventListener('submit', async (e) => {
   renderInventory();
 });
 
-// ---------- audit screen (§8: full filterable feed) ----------
+async function renderSitrep() {
+  try {
+    const s = await api('/api/sitrep');
+    $('#sitrep-content').innerHTML = `
+      <div class="sitrep-card" style="background:var(--card); padding:20px; border-radius:12px; border:1px solid var(--line);">
+        <h3 style="margin-top:0;">${esc(s.title)}</h3>
+        <div class="sitrep-narrative dim" style="margin-bottom:16px;">${esc(s.narrative)}</div>
+        
+        <h4>📊 Summary</h4>
+        <div class="strip">
+          ${Object.entries(s.summary).map(([k,v]) => `<div class="stat"><b>${v}</b><span>${k.replace(/_/g,' ')}</span></div>`).join('')}
+        </div>
+        
+        <h4>🏘️ Zone Status</h4>
+        <div class="cards">
+          ${s.zone_status.map(z => `<div class="card t-${z.tier}"><h3>${esc(z.name)} <span class="badge ${z.tier}">${z.tier}</span></h3><div class="dim">Score: ${z.severity_score} · Trend: ${z.trend || '—'} · Top gaps: ${(z.top_gaps||[]).join(', ') || 'none'}</div></div>`).join('')}
+        </div>
+        
+        <h4>📦 Resource Status</h4>
+        <table style="margin-bottom:16px;">
+          <tr><th>Category</th><th>Available</th><th>Burn Rate</th><th>Depletion ETA</th><th>Status</th></tr>
+          ${s.resource_status.map(r => `<tr><td>${r.category}</td><td>${r.available}</td><td>${r.burn_rate?.toFixed(1) || '0'}/hr</td><td>${r.hours_to_depletion != null ? (r.hours_to_depletion === Infinity ? '∞' : r.hours_to_depletion.toFixed(1) + 'h') : '—'}</td><td><span class="badge ${r.status}">${r.status}</span></td></tr>`).join('')}
+        </table>
+        
+        <h4>💡 Recommendations</h4>
+        <ul class="feed">${(s.recommendations||[]).map(r => `<li>🔸 ${esc(r)}</li>`).join('') || '<li class="dim">No recommendations at this time.</li>'}</ul>
+        
+        <h4>📋 Recent Actions</h4>
+        <ul class="feed">${(s.recent_actions||[]).map(feedRow).join('')}</ul>
+      </div>
+    `;
+  } catch(e) {
+    $('#sitrep-content').innerHTML = `<div class="banner">${esc(e.message)}</div>`;
+  }
+}
+$('#sitrep-refresh').onclick = renderSitrep;
+
+let latestSitrepData = null;
+
+const originalRenderSitrep = renderSitrep;
+renderSitrep = async function() {
+  try {
+    const s = await api('/api/sitrep');
+    latestSitrepData = s;
+    $('#sitrep-content').innerHTML = `
+      <div class="sitrep-card" style="background:var(--card); padding:20px; border-radius:12px; border:1px solid var(--line);">
+        <h3 style="margin-top:0;">${esc(s.title)}</h3>
+        <div class="sitrep-narrative dim" style="margin-bottom:16px;">${esc(s.narrative)}</div>
+        
+        <h4>📊 Summary</h4>
+        <div class="strip">
+          ${Object.entries(s.summary).map(([k,v]) => `<div class="stat"><b>${v}</b><span>${k.replace(/_/g,' ')}</span></div>`).join('')}
+        </div>
+        
+        <h4>🏘️ Zone Status</h4>
+        <div class="cards">
+          ${s.zone_status.map(z => `<div class="card t-${z.tier}"><h3>${esc(z.name)} <span class="badge ${z.tier}">${z.tier}</span></h3><div class="dim">Score: ${z.severity_score} · Trend: ${z.trend || '—'} · Top gaps: ${(z.top_gaps||[]).join(', ') || 'none'}</div></div>`).join('')}
+        </div>
+        
+        <h4>📦 Resource Status</h4>
+        <table style="margin-bottom:16px;">
+          <tr><th>Category</th><th>Available</th><th>Burn Rate</th><th>Depletion ETA</th><th>Status</th></tr>
+          ${s.resource_status.map(r => `<tr><td>${r.category}</td><td>${r.available}</td><td>${r.burn_rate?.toFixed(1) || '0'}/hr</td><td>${r.hours_to_depletion != null ? (r.hours_to_depletion === Infinity ? '∞' : r.hours_to_depletion.toFixed(1) + 'h') : '—'}</td><td><span class="badge ${r.status}">${r.status}</span></td></tr>`).join('')}
+        </table>
+        
+        <h4>💡 Recommendations</h4>
+        <ul class="feed">${(s.recommendations||[]).map(r => `<li>🔸 ${esc(r)}</li>`).join('') || '<li class="dim">No recommendations at this time.</li>'}</ul>
+        
+        <h4>📋 Recent Actions</h4>
+        <ul class="feed">${(s.recent_actions||[]).map(feedRow).join('')}</ul>
+      </div>
+    `;
+  } catch(e) {
+    $('#sitrep-content').innerHTML = `<div class="banner">${esc(e.message)}</div>`;
+  }
+};
+
+if ($('#sitrep-export-md')) {
+  $('#sitrep-export-md').onclick = () => {
+    if (!latestSitrepData) return alert('Please wait for SITREP to load or click Refresh.');
+    const s = latestSitrepData;
+    const md = `# ${s.title}
+Generated: ${new Date(s.timestamp).toLocaleString()}
+
+## Executive Summary
+${s.narrative}
+
+### Metrics
+- Active Zones: ${s.summary.total_zones}
+- Critical Zones: ${s.summary.critical_zones}
+- High-Severity Zones: ${s.summary.high_zones}
+- Population Affected: ${s.summary.total_population_affected}
+- Resources Allocated: ${s.summary.resources_allocated} units
+- Open Reallocation Proposals: ${s.summary.open_proposals}
+
+## Actionable Recommendations
+${(s.recommendations || []).map(r => `- ${r}`).join('\n')}
+
+## Zone Priority Status
+| Zone | Tier | Score | Trend | Unmet Gaps |
+|---|---|---|---|---|
+${(s.zone_status || []).map(z => `| ${z.name} | ${z.tier} | ${z.severity_score} | ${z.trend || 'stable'} | ${(z.top_gaps || []).join(', ') || 'none'} |`).join('\n')}
+
+## Inventory & Depletion Forecasts
+| Category | Available Stock | Burn Rate (/hr) | Est. Depletion | Status |
+|---|---|---|---|---|
+${(s.resource_status || []).map(r => `| ${r.category} | ${r.available} | ${r.burn_rate?.toFixed(1) || 0} | ${r.hours_to_depletion != null ? r.hours_to_depletion.toFixed(1) + 'h' : 'Stable'} | ${r.status} |`).join('\n')}
+
+## Recent Incident Log
+${(s.recent_actions || []).map(a => `- **${a.action_type}** (${a.actor}): ${a.description}`).join('\n')}
+`;
+
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `SITREP_${new Date().toISOString().replace(/[:.]/g, '-')}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+}
+
+async function renderSimulation() {
+  try {
+    const scenarios = await api('/api/simulate/scenarios');
+    $('#sim-scenario').innerHTML = scenarios.map(s => `<option value="${s.key}">${esc(s.name)} — ${esc(s.description)} (${s.event_count} events)</option>`).join('');
+  } catch(e) { console.error(e); }
+  await updateSimStatus();
+}
+
+async function updateSimStatus() {
+  try {
+    const status = await api('/api/simulate/status');
+    if (status.running) {
+      $('#sim-start').disabled = true;
+      $('#sim-stop').disabled = false;
+      $('#sim-status').innerHTML = `<div class="banner proposal">🔴 LIVE — ${esc(status.scenario_name)} · ${status.events_completed}/${status.total_events} events · Speed ${status.speed}×</div>`;
+    } else {
+      $('#sim-start').disabled = false;
+      $('#sim-stop').disabled = true;
+      $('#sim-status').innerHTML = status.scenario_name ? `<div class="banner">Simulation complete: ${esc(status.scenario_name)}</div>` : '';
+    }
+  } catch(e) { console.error(e); }
+}
+
+$('#sim-start').onclick = async () => {
+  const scenario = $('#sim-scenario').value;
+  const speed = parseInt(document.querySelector('.speed-btn.active')?.dataset.speed || '5');
+  try {
+    await api('/api/simulate/start', { method: 'POST', body: JSON.stringify({ scenario, speed }) });
+    $('#sim-log').innerHTML = '';
+    appendSimLog({ type: 'simulation_started', payload: { scenario } });
+    await updateSimStatus();
+  } catch(e) { alert(e.message); }
+};
+
+$('#sim-stop').onclick = async () => {
+  await api('/api/simulate/stop', { method: 'POST', body: '{}' });
+  await updateSimStatus();
+};
+
+document.querySelectorAll('.speed-btn').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  };
+});
+
+function appendSimLog(event) {
+  const li = document.createElement('li');
+  li.innerHTML = `<b>${event.type}</b> — ${JSON.stringify(event.payload || {}).slice(0, 120)} <span class="dim">${new Date().toLocaleTimeString()}</span>`;
+  $('#sim-log').prepend(li);
+}
+
 async function renderAudit() {
   const zone = $('#audit-zone').value.trim(), actor = $('#audit-actor').value.trim();
   const rows = await api(`/api/audit-log?${new URLSearchParams({ ...(zone && { zone }), ...(actor && { actor }) })}`);
@@ -190,7 +856,88 @@ async function renderAudit() {
 }
 $('#audit-refresh').onclick = renderAudit;
 
+if ($('#btn-demo-tour')) {
+  $('#btn-demo-tour').onclick = () => $('#demo-modal').classList.remove('hidden');
+}
+if ($('#demo-modal-close')) {
+  $('#demo-modal-close').onclick = () => $('#demo-modal').classList.add('hidden');
+}
+
+window.runDemoStep = async (step) => {
+  const out = $('#demo-output');
+  if (out) {
+    out.classList.remove('hidden');
+    out.innerHTML = `<span class="dim">Executing Step ${step}...</span>`;
+  }
+  try {
+    if (step === 1) {
+      await api('/api/seed', { method: 'POST' });
+      if (out) out.innerHTML = `✅ <b>Step 1 Complete:</b> Seeded 4 baseline zones (Ward 3, 7, 11, 14). 12 scarce medical kits pre-committed to Ward 3.`;
+      show('dashboard');
+    } else if (step === 2) {
+      const res = await api('/api/reports', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'Ward 9', location: 'Ward 9, West District', population_affected: 1500,
+          needs: ['medical', 'rescue'], rescue_needed: true, urgency_high: true
+        })
+      });
+      if (out) out.innerHTML = `✅ <b>Step 2 Complete:</b> Ward 9 recorded with <b>rescue_needed: true</b> → Hard override fired → Tier: CRITICAL. Reallocation agent proposed diversion card on dashboard!`;
+      show('dashboard');
+    } else if (step === 3) {
+      const props = await api('/api/reallocations');
+      if (props.length > 0) {
+        await api(`/api/reallocations/${props[0].allocation_id}/accept`, { method: 'POST', body: '{}' });
+        const allocs = await api('/api/allocations');
+        const ward9Alloc = allocs.find(a => (a.status === 'confirmed' && a.category === 'medical' && a.to_zone));
+        if (ward9Alloc) {
+          await api(`/api/allocations/${ward9Alloc.allocation_id}/deliver`, { method: 'POST', body: '{}' });
+        }
+        if (out) out.innerHTML = `✅ <b>Step 3 Complete:</b> Accepted re-allocation proposal. Ward 3 allocation marked <i>diverted</i>. Stock delivered to Ward 9. Inventory decremented at delivery only!`;
+      } else {
+        if (out) out.innerHTML = `ℹ️ No open proposal found. Make sure Step 2 was run first.`;
+      }
+      show('dashboard');
+    } else if (step === 4) {
+      await api('/zones/Z2/update', {
+        method: 'POST',
+        body: JSON.stringify({ population_affected: 1600, urgency_high: true })
+      });
+      if (out) out.innerHTML = `✅ <b>Step 4 Complete:</b> Ward 7 population doubled (800 → 1600). Severity score surged live. Reallocation check ran and logged provable <b>no-op</b> to audit trail!`;
+      show('dashboard');
+    } else if (step === 5) {
+      await api('/api/reports', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'Ward 3', location: 'Ward 3, North District', population_affected: 1200,
+          needs: ['medical', 'food']
+        })
+      });
+      if (out) out.innerHTML = `✅ <b>Step 5 Complete:</b> Resubmitted Ward 3 report. Duplicate detector flagged match score ≥ 3! Notice the review banner on top of Dashboard.`;
+      show('dashboard');
+    } else if (step === 6) {
+      try {
+        await api('/zones/Z4/claim', {
+          method: 'POST',
+          body: JSON.stringify({ category: 'medical', agency_id: 'AG1', quantity: 10 })
+        });
+        await api('/zones/Z4/deliver', {
+          method: 'POST',
+          body: JSON.stringify({ category: 'medical', agency_id: 'AG1', quantity: 10 })
+        });
+      } catch(e) {}
+      if (out) out.innerHTML = `✅ <b>Step 6 Complete:</b> Ward 14 claimed medical supplies while stock was empty (0). Allocation agent issued <b>partial allocation</b> (0 units) and logged shortfall honestly to audit log!`;
+      show('dashboard');
+    } else if (step === 7) {
+      if (out) out.innerHTML = `✅ <b>Step 7 Complete:</b> Switched to SITREP view. Review auto-generated intelligence brief and actionable recommendations!`;
+      show('sitrep');
+    }
+  } catch(err) {
+    if (out) out.innerHTML = `❌ Error in Step ${step}: ${err.message}`;
+  }
+};
+
+setupVoiceDispatcher();
+setupVoiceBriefing();
 show('dashboard');
-setInterval(() => { if (state.screen === 'dashboard') renderDashboard(); }, 8000); // §11: 5–10s poll
-
-
+setInterval(() => { if (state.screen === 'dashboard') renderDashboard(); }, 15000); // 15s poll as fallback

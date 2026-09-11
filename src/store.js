@@ -21,6 +21,7 @@ export const store = {
   CLAIMS: [],
   AUDIT_LOG: [],
   DUPLICATE_FLAGS: [],
+  SEVERITY_HISTORY: [],  // track severity changes for trend analysis
   _seq: {},
 };
 
@@ -63,6 +64,17 @@ export function availableQuantity(category) {
   return store.RESOURCE_ITEMS
     .filter((r) => r.category === category && r.status === 'available')
     .reduce((sum, r) => sum + r.quantity_available, 0);
+}
+
+export function recordSeveritySnapshot(zone) {
+  store.SEVERITY_HISTORY.push({
+    zone_id: zone.zone_id,
+    severity_score: zone.severity_score,
+    tier: zone.tier,
+    timestamp: new Date().toISOString(),
+  });
+  // Keep only last 100 entries to prevent memory growth
+  if (store.SEVERITY_HISTORY.length > 100) store.SEVERITY_HISTORY.shift();
 }
 
 // §12 setup — "seed exactly 4 zones at mixed tiers", medical deliberately scarce

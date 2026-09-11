@@ -7,6 +7,7 @@ import { findDuplicateReport } from './agents/duplicateReport.js';
 import { assessNeeds } from './agents/needsAssessment.js';
 import { scoreZone } from './agents/severityScoring.js';
 import { runReallocationCheck } from './agents/reallocation.js';
+import { recordSeveritySnapshot } from './store.js';
 
 // Steps 2–6 of the pipeline. Shared by report-submission, duplicate-merge, and
 // zone-update entry points so all three stay in lockstep.
@@ -14,6 +15,7 @@ export function runAssessmentPipeline(zone, actor) {
   // Steps 3–4: needs assessment, then severity scoring — two separate agents (§13).
   assessNeeds(zone);
   const scoring = scoreZone(zone);
+  recordSeveritySnapshot(zone);
   audit({
     actor,
     action_type: 'SCORED',

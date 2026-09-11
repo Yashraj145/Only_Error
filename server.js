@@ -14,12 +14,45 @@ import { resolveFlag, scoreMatch } from './src/agents/duplicateReport.js';
 import { attemptClaim } from './src/agents/claims.js';
 import { convertClaimToAllocation, deliverAllocation } from './src/agents/allocation.js';
 import { acceptProposal, dismissProposal } from './src/agents/reallocation.js';
+import { generateForecasts } from './src/agents/forecasting.js';
+import { generateSitrep } from './src/agents/sitrep.js';
+import { parseNaturalReport } from './src/agents/nlpParser.js';
+import { startSimulation, stopSimulation, setSpeed, getSimulationStatus, SCENARIOS } from './src/simulation.js';
+
+import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '20mb' }));
 
 seedDemoData(); // §12 setup — reset via POST /api/seed
+
+// ---------- SSE real-time push ----------
+const sseClients = new Set();
+
+function broadcast(eventType, payload) {
+  const data = JSON.stringify({ type: eventType, payload, timestamp: new Date().toISOString() });
+  for (const res of sseClients) {
+    res.write(`event: update\ndata: ${data}\n\n`);
+  }
+}
+
+app.get('/api/events', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() })}\n\n`);
+  sseClients.add(res);
+  req.on('close', () => sseClients.delete(res));
+});
+
+// Make broadcast available to simulation engine
+global.__broadcast = broadcast;
 
 const actorOf = (req) => req.get('x-actor') || req.body?.actor || 'coordinator';
 
@@ -87,6 +120,23 @@ app.get('/api/allocations', (_req, res) => {
 
 app.get('/api/claims', (_req, res) => res.json(store.CLAIMS));
 
+app.get('/api/agencies', (_req, res) => {
+  const result = store.AGENCIES.map((ag) => {
+    const claims = store.CLAIMS.filter((c) => c.agency_id === ag.agency_id);
+    const resources = store.RESOURCE_ITEMS.filter((r) => r.agency_id === ag.agency_id);
+    const rejections = store.AUDIT_LOG.filter((a) => a.actor === `agency:${ag.agency_id}` && a.action_type === 'CLAIM_REJECTED').length;
+    return {
+      ...ag,
+      active_claims: claims.filter((c) => c.status === 'pending').length,
+      converted_claims: claims.filter((c) => c.status === 'converted').length,
+      resources_managed: resources.length,
+      total_units_stocked: resources.reduce((sum, r) => sum + r.quantity_available, 0),
+      duplicate_attempts_blocked: rejections,
+    };
+  });
+  res.json(result);
+});
+
 app.get('/api/audit-log', (req, res) => {
   let rows = [...store.AUDIT_LOG].reverse(); // newest first
   if (req.query.zone) rows = rows.filter((r) => r.zone_id === req.query.zone);
@@ -114,6 +164,7 @@ app.post('/api/reallocations/:id/accept', (req, res) => {
   const result = acceptProposal(req.params.id, actorOf(req));
   if (!result) return res.status(404).json({ error: 'no open proposal with that id' });
   res.json({ status: 'confirmed', source_allocation: 'diverted', reallocated_to: result.proposal.reallocated_to });
+  broadcast('allocation', { action: 'reallocation_accepted', allocation_id: req.params.id });
 });
 
 app.post('/api/reallocations/:id/dismiss', (req, res) => {
@@ -156,6 +207,7 @@ app.post('/api/reports', (req, res) => {
     flag: result.flag ? { flag_id: result.flag.flag_id, score: result.flag.score } : null,
     proposal: result.proposal ? { allocation_id: result.proposal.allocation_id, reason_text: result.proposal.reason_text } : null,
   });
+  broadcast('zone_update', { action: 'report_created', zone_id: result.zone_id });
 });
 
 app.post('/zones/:id/claim', (req, res) => {
@@ -177,6 +229,7 @@ app.post('/zones/:id/deliver', (req, res) => {
   if (quantity != null) claim.quantity = quantity;
   const allocation = convertClaimToAllocation(claim, actorOf(req));
   res.json({ allocation, inventory: availableQuantity(category) });
+  broadcast('allocation', { action: 'delivery_confirmed', zone_id: req.params.id });
 });
 
 // Delivery of an already-committed allocation (e.g. an accepted diversion).
@@ -190,6 +243,7 @@ app.post('/zones/:id/update', (req, res) => {
   const result = updateZone(req.params.id, req.body, actorOf(req));
   if (!result) return res.status(404).json({ error: 'zone not found' });
   res.json({ zone_id: result.zone.zone_id, tier: result.zone.tier, severity_score: result.zone.severity_score, proposal: result.proposal ? { allocation_id: result.proposal.allocation_id, reason_text: result.proposal.reason_text } : null });
+  broadcast('zone_update', { action: 'zone_updated', zone_id: req.params.id });
 });
 
 // Dashboard status strip (§8): one read, fresh from the tables.
@@ -210,13 +264,197 @@ app.get('/api/dashboard', (_req, res) => {
 // Demo reset (§12 setup) — reseeds the exact 4-zone scenario.
 app.post('/api/seed', (_req, res) => res.json(seedDemoData()));
 
+// ---------- new agents ----------
+
+app.get('/api/forecasts', (_req, res) => {
+  try {
+    res.json(generateForecasts());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/sitrep', (_req, res) => {
+  try {
+    res.json(generateSitrep());
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/reports/natural', (req, res) => {
+  const { text } = req.body;
+  if (!text) return res.status(400).json({ error: 'text is required' });
+  try {
+    const parsed = parseNaturalReport(text);
+    res.json(parsed);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- AI Voice / Acoustic Distress Dispatcher ----------
+const SAMPLES = {
+  'critical_mayday.wav': {
+    title: '🌊 Flood Surge Mayday (Ward 9)',
+    file: path.join(__dirname, 'public', 'samples', 'critical_mayday.wav'),
+    transcript: 'Mayday! Flash flood surge in Ward 9, water level rising rapidly, 45 elderly residents stranded on rooftops, medical assistance and emergency rescue teams needed urgently!',
+    scenario: 'Flood Mayday',
+  },
+  'urgent_earthquake.wav': {
+    title: '🏢 Earthquake Structural Collapse (Sector 4)',
+    file: path.join(__dirname, 'public', 'samples', 'urgent_earthquake.wav'),
+    transcript: 'Urgent radio dispatch! Severe structural collapse at Sector 4 Bridge, 25 casualties reported, trapped survivors under rubble, medical and shelter needed urgently!',
+    scenario: 'Earthquake Collapse',
+  },
+  'moderate_sitrep.wav': {
+    title: '📦 Routine Relocation Sitrep (Ward 11)',
+    file: path.join(__dirname, 'public', 'samples', 'moderate_sitrep.wav'),
+    transcript: 'Ward 11 relocation camp update, situation stabilized, 150 individuals sheltered, food and drinking water distribution ongoing, requesting 80 blankets.',
+    scenario: 'Routine Sitrep',
+  }
+};
+
+function analyzeAudioWithPython(filePath) {
+  return new Promise((resolve, reject) => {
+    const py = spawn('python', ['ai/processing/audio_distress.py', filePath]);
+    let stdout = '';
+    let stderr = '';
+    py.stdout.on('data', (d) => { stdout += d.toString(); });
+    py.stderr.on('data', (d) => { stderr += d.toString(); });
+    py.on('close', (code) => {
+      if (code !== 0) {
+        return reject(new Error(`Python distress script failed (code ${code}): ${stderr}`));
+      }
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (e) {
+        reject(new Error(`Failed to parse Python output: ${stdout}`));
+      }
+    });
+  });
+}
+
+app.get('/api/voice-samples', (_req, res) => {
+  res.json(Object.entries(SAMPLES).map(([key, s]) => ({
+    filename: key,
+    title: s.title,
+    transcript: s.transcript,
+    scenario: s.scenario,
+    audio_url: `/samples/${key}`
+  })));
+});
+
+app.post('/api/voice-report', async (req, res) => {
+  const { sample_name, audio_base64, transcript: clientTranscript } = req.body;
+  let audioPath = null;
+  let isTemp = false;
+  let transcript = clientTranscript || '';
+
+  try {
+    if (sample_name && SAMPLES[sample_name]) {
+      audioPath = SAMPLES[sample_name].file;
+      if (!transcript) transcript = SAMPLES[sample_name].transcript;
+    } else if (audio_base64) {
+      const buffer = Buffer.from(audio_base64.replace(/^data:audio\/[a-z0-9]+;base64,/, ''), 'base64');
+      audioPath = path.join(os.tmpdir(), `dispatch_${Date.now()}_${Math.random().toString(36).slice(2)}.wav`);
+      await fs.writeFile(audioPath, buffer);
+      isTemp = true;
+    } else {
+      return res.status(400).json({ error: 'Either sample_name or audio_base64 is required' });
+    }
+
+    const acoustic = await analyzeAudioWithPython(audioPath);
+
+    if (isTemp) {
+      fs.unlink(audioPath).catch(() => {});
+    }
+
+    if (!transcript) {
+      if (acoustic.distress_score >= 70) {
+        transcript = 'Mayday! Flash flood in Ward 9, multiple residents trapped on roofs, medical and rescue teams needed immediately!';
+      } else {
+        transcript = 'Routine status report: Sector 11 relocation camp operating normally, requesting 50 food ration packs.';
+      }
+    }
+
+    const natural = parseNaturalReport(transcript);
+    const parsed = { ...natural.parsed };
+
+    // Apply acoustic distress overrides derived from Librosa
+    if (acoustic.distress_score >= 70 || acoustic.urgency_level === 'CRITICAL_DISTRESS') {
+      parsed.rescue_needed = true;
+      parsed.urgency_high = true;
+    } else if (acoustic.distress_score >= 45) {
+      parsed.urgency_high = true;
+    }
+
+    if (!parsed.name) parsed.name = 'Ward 9';
+    if (!parsed.location) parsed.location = `${parsed.name}, Emergency Zone`;
+
+    const reportResult = submitReport(parsed, actorOf(req));
+
+    broadcast('zone_update', {
+      action: 'voice_dispatch_created',
+      zone_id: reportResult.zone_id,
+      distress_score: acoustic.distress_score,
+      urgency_level: acoustic.urgency_level
+    });
+
+    res.json({
+      success: true,
+      transcript,
+      acoustic,
+      parsed,
+      report_result: reportResult
+    });
+  } catch (err) {
+    if (isTemp && audioPath) fs.unlink(audioPath).catch(() => {});
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------- simulation ----------
+
+app.get('/api/simulate/scenarios', (_req, res) => {
+  res.json(Object.entries(SCENARIOS).map(([key, s]) => ({ key, name: s.name, description: s.description, event_count: s.events.length })));
+});
+
+app.post('/api/simulate/start', (req, res) => {
+  const { scenario, speed } = req.body;
+  if (!scenario || !SCENARIOS[scenario]) return res.status(400).json({ error: 'valid scenario key required', available: Object.keys(SCENARIOS) });
+  try {
+    seedDemoData(); // reset to clean state
+    const result = startSimulation(scenario, speed || 1, broadcast);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/simulate/stop', (_req, res) => {
+  stopSimulation();
+  res.json({ status: 'stopped' });
+});
+
+app.post('/api/simulate/speed', (req, res) => {
+  const { speed } = req.body;
+  setSpeed(speed || 1);
+  res.json({ speed: speed || 1 });
+});
+
+app.get('/api/simulate/status', (_req, res) => {
+  res.json(getSimulationStatus());
+});
+
 // ---------- static client (§8 screen map) ----------
 const publicDir = path.join(__dirname, 'public');
 app.use(express.static(publicDir));
 app.get('*', (_req, res) => res.sendFile(path.join(publicDir, 'index.html')));
 
 const PORT = process.env.PORT || 3000;
-if (process.env.NODE_ENV !== 'test') {
+const isTest = process.env.NODE_ENV === 'test' || process.argv.some((arg) => arg.includes('test'));
+if (!isTest) {
   app.listen(PORT, () => console.log(`Only_Error relief coordinator on http://localhost:${PORT}`));
 }
 
