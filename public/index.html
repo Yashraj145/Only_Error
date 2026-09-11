@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Only_Error — Relief Resource Coordinator</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">🆘 Only_Error <span>Relief Coordinator</span></div>
+    <nav id="nav">
+      <button data-screen="dashboard" class="active">Dashboard</button>
+      <button data-screen="report">Report</button>
+      <button data-screen="inventory">Inventory</button>
+      <button data-screen="audit">Audit Log</button>
+    </nav>
+  </header>
+
+  <main id="app">
+    <!-- DASHBOARD -->
+    <section id="screen-dashboard" class="screen active">
+      <div id="status-strip" class="strip"></div>
+      <div id="dup-banner"></div>
+      <div id="proposal-card"></div>
+      <h2>Priority-ranked zone list</h2>
+      <div id="zone-list" class="cards"></div>
+      <h2>Inventory summary</h2>
+      <div id="inventory-summary" class="cards"></div>
+      <h2>Activity feed <button class="link" data-screen="audit">View all →</button></h2>
+      <ul id="activity-feed" class="feed"></ul>
+    </section>
+
+    <!-- REPORT -->
+    <section id="screen-report" class="screen">
+      <h2>Zone report</h2>
+      <form id="report-form">
+        <label>Zone name<input name="name" required placeholder="Ward 9" /></label>
+        <label>Location / landmark<input name="location" required placeholder="Ward 9, West District" /></label>
+        <label>Population affected<input name="population_affected" type="number" min="0" value="500" /></label>
+        <fieldset><legend>Resource needs</legend>
+          <div id="need-chips" class="chips"></div>
+        </fieldset>
+        <label class="check"><input type="checkbox" name="rescue_needed" /> Rescue needed (hard override → critical)</label>
+        <label class="check"><input type="checkbox" name="urgency_high" /> Reporter flags situation urgent (×1.2)</label>
+        <button type="submit">Submit report</button>
+        <div id="report-result"></div>
+      </form>
+    </section>
+
+    <!-- INVENTORY -->
+    <section id="screen-inventory" class="screen">
+      <h2>Resource inventory</h2>
+      <div id="inventory-list" class="cards"></div>
+      <h3>Add resource</h3>
+      <form id="inventory-form">
+        <label>Agency<select name="agency_id"></select></label>
+        <label>Category<select name="category"></select></label>
+        <label>Unit<input name="unit" value="unit" /></label>
+        <label>Quantity<input name="quantity_available" type="number" min="0" value="10" /></label>
+        <button type="submit">Add</button>
+        <div id="inventory-result"></div>
+      </form>
+    </section>
+
+    <!-- AUDIT LOG -->
+    <section id="screen-audit" class="screen">
+      <h2>Audit log</h2>
+      <div class="filters">
+        <input id="audit-zone" placeholder="filter by zone id (e.g. Z2)" />
+        <input id="audit-actor" placeholder="filter by actor" />
+        <button id="audit-refresh">Refresh</button>
+      </div>
+      <ul id="audit-list" class="feed"></ul>
+    </section>
+
+    <!-- ZONE DETAIL (modal) -->
+    <div id="zone-modal" class="modal hidden">
+      <div class="modal-card">
+        <button class="close" id="zone-modal-close">✕</button>
+        <div id="zone-detail"></div>
+      </div>
+    </div>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
