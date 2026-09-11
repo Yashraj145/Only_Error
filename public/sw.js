@@ -1,7 +1,15 @@
-const CACHE = 'relief-v1';
-const ASSETS = ['/', '/index.html', '/app.js', '/styles.css'];
-self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS))));
-self.addEventListener('fetch', e => {
-  if (e.request.url.includes('/api/')) return; // Don't cache API calls
-  e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+// Cache clearer for development and hackathon evaluation
+self.addEventListener('install', (e) => {
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (e) => {
+  e.waitUntil(
+    caches.keys().then((keys) => Promise.all(keys.map((k) => caches.delete(k)))).then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch', (e) => {
+  // Always fetch fresh network copies
+  e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
 });

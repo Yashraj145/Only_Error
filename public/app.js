@@ -142,9 +142,13 @@ function show(screen) {
     renderDashboard();
     setTimeout(() => { if(map) map.invalidateSize(); }, 100);
   }
+  if (screen === 'report') setupVoiceDispatcher();
   if (screen === 'inventory') renderInventory();
   if (screen === 'audit') renderAudit();
-  if (screen === 'sitrep') renderSitrep();
+  if (screen === 'sitrep') {
+    renderSitrep();
+    setupVoiceBriefing();
+  }
   if (screen === 'simulation') renderSimulation();
 }
 
@@ -516,24 +520,76 @@ function setupVoiceDispatcher() {
   });
 }
 
+let audioCtx = null;
+let mediaStream = null;
+let scriptNode = null;
+let pcmBuffers = [];
+
+function encodePCMToWAV(buffers, sampleRate) {
+  let totalLength = 0;
+  for (let i = 0; i < buffers.length; i++) totalLength += buffers[i].length;
+  const merged = new Float32Array(totalLength);
+  let offset = 0;
+  for (let i = 0; i < buffers.length; i++) {
+    merged.set(buffers[i], offset);
+    offset += buffers[i].length;
+  }
+
+  const buffer = new ArrayBuffer(44 + merged.length * 2);
+  const view = new DataView(buffer);
+
+  function writeString(view, offset, str) {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  }
+
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + merged.length * 2, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(22, 1, true); // Mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, merged.length * 2, true);
+
+  let p = 44;
+  for (let i = 0; i < merged.length; i++) {
+    let s = Math.max(-1, Math.min(1, merged[i]));
+    view.setInt16(p, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    p += 2;
+  }
+
+  return new Blob([view], { type: 'audio/wav' });
+}
+
 async function startRecording() {
   const btnRec = $('#btn-record-mic');
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    mediaRecorder = new MediaRecorder(stream);
-    audioChunks = [];
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) audioChunks.push(e.data);
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("Microphone API not supported by browser. Please use the 1-Click Presets or upload an audio file.");
+    }
+    $('#rec-label').textContent = 'Requesting mic permission...';
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(mediaStream);
+
+    scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+    pcmBuffers = [];
+
+    scriptNode.onaudioprocess = (e) => {
+      if (!isRecording) return;
+      const input = e.inputBuffer.getChannelData(0);
+      pcmBuffers.push(new Float32Array(input));
     };
-    mediaRecorder.onstop = async () => {
-      const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        const base64 = reader.result;
-        await processVoiceDispatch({ audio_base64: base64, transcript: window.__recognizedText || '' });
-      };
-      reader.readAsDataURL(audioBlob);
-    };
+
+    source.connect(scriptNode);
+    scriptNode.connect(audioCtx.destination);
 
     window.__recognizedText = '';
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -553,11 +609,10 @@ async function startRecording() {
         recognizer.start();
         window.__speechRecognizer = recognizer;
       } catch (err) {
-        console.warn('SpeechRecognition not available:', err);
+        console.warn('SpeechRecognition note:', err);
       }
     }
 
-    mediaRecorder.start();
     isRecording = true;
     recordStartTime = Date.now();
     if (btnRec) {
@@ -569,72 +624,136 @@ async function startRecording() {
       $('#rec-label').textContent = `🔴 Recording (00:${sec < 10 ? '0' : ''}${sec})... Click to Stop`;
     }, 500);
   } catch (err) {
-    alert("Microphone access: " + err.message + "\nYou can use the 1-Click Radio Presets or upload an audio file instead.");
+    console.error(err);
+    alert("Microphone Error: " + err.message + "\n\nTip: You can use the '1-Click Radio Presets' right below or upload an audio file!");
+    if (btnRec) {
+      btnRec.style.background = '#ef4444';
+      btnRec.classList.remove('pulse');
+      $('#rec-label').textContent = 'Hold / Click to Record Voice';
+    }
   }
 }
 
 function stopRecording() {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop();
-    mediaRecorder.stream.getTracks().forEach(t => t.stop());
-  }
-  if (window.__speechRecognizer) {
-    try { window.__speechRecognizer.stop(); } catch (e) {}
-  }
+  if (!isRecording) return;
   isRecording = false;
   clearInterval(recordTimer);
+
   const btnRec = $('#btn-record-mic');
   if (btnRec) {
     btnRec.style.background = '#ef4444';
     btnRec.classList.remove('pulse');
-    $('#rec-label').textContent = 'Hold / Click to Record Voice';
+    $('#rec-label').textContent = 'Encoding WAV audio...';
+  }
+
+  if (window.__speechRecognizer) {
+    try { window.__speechRecognizer.stop(); } catch (e) {}
+  }
+
+  if (scriptNode) {
+    scriptNode.disconnect();
+    scriptNode = null;
+  }
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(track => track.stop());
+    mediaStream = null;
+  }
+
+  const sampleRate = audioCtx ? audioCtx.sampleRate : 44100;
+  if (audioCtx) {
+    audioCtx.close().catch(() => {});
+    audioCtx = null;
+  }
+
+  const wavBlob = encodePCMToWAV(pcmBuffers, sampleRate);
+  const reader = new FileReader();
+  reader.onloadend = async () => {
+    const base64 = reader.result;
+    if (btnRec) $('#rec-label').textContent = 'Hold / Click to Record Voice';
+    await processVoiceDispatch({
+      audio_base64: base64,
+      transcript: window.__recognizedText || ''
+    });
+  };
+  reader.readAsDataURL(wavBlob);
+}
+
+function triggerVoiceBriefing() {
+  if (!window.speechSynthesis) {
+    alert("SpeechSynthesis is not supported in this browser.");
+    return;
+  }
+  const topBtn = $('#sitrep-voice-briefing');
+  const innerBtn = $('#btn-sitrep-speak-inner');
+
+  if (isSpeaking) {
+    window.speechSynthesis.cancel();
+    isSpeaking = false;
+    if (topBtn) {
+      topBtn.textContent = '🎙️ Play Voice Briefing';
+      topBtn.style.color = '#38bdf8';
+    }
+    if (innerBtn) {
+      innerBtn.textContent = '🎙️ Play Voice Briefing';
+      innerBtn.style.color = '#38bdf8';
+    }
+    return;
+  }
+
+  if (!latestSitrepData) {
+    alert("Please wait for SITREP data to load or click Refresh.");
+    return;
+  }
+
+  const s = latestSitrepData;
+  const recs = (s.recommendations || []).slice(0, 2).join('. ') || 'All logistics corridors functional.';
+  const text = `Disaster Relief Operational Briefing. ${s.narrative}. There are currently ${s.summary.active_zones} active emergency zones, with ${s.summary.critical_zones} critical sectors requiring immediate intervention. Total resources allocated: ${s.summary.resources_allocated} units. Tactical priority: ${recs}. End of situational briefing.`;
+
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 1.02;
+  utterance.pitch = 0.95;
+
+  utterance.onend = () => {
+    isSpeaking = false;
+    if (topBtn) {
+      topBtn.textContent = '🎙️ Play Voice Briefing';
+      topBtn.style.color = '#38bdf8';
+    }
+    if (innerBtn) {
+      innerBtn.textContent = '🎙️ Play Voice Briefing';
+      innerBtn.style.color = '#38bdf8';
+    }
+  };
+
+  utterance.onerror = (err) => {
+    console.warn("SpeechSynthesis error:", err);
+    isSpeaking = false;
+    if (topBtn) topBtn.textContent = '🎙️ Play Voice Briefing';
+    if (innerBtn) innerBtn.textContent = '🎙️ Play Voice Briefing';
+  };
+
+  window.speechSynthesis.speak(utterance);
+  isSpeaking = true;
+  if (topBtn) {
+    topBtn.textContent = '⏹ Stop Voice Briefing';
+    topBtn.style.color = '#ef4444';
+  }
+  if (innerBtn) {
+    innerBtn.textContent = '⏹ Stop Voice Briefing';
+    innerBtn.style.color = '#ef4444';
   }
 }
 
 function setupVoiceBriefing() {
-  const btn = $('#sitrep-voice-briefing');
-  if (!btn) return;
-  btn.onclick = () => {
-    if (!window.speechSynthesis) {
-      alert("SpeechSynthesis not supported in this browser.");
-      return;
-    }
-    if (isSpeaking) {
-      window.speechSynthesis.cancel();
-      isSpeaking = false;
-      btn.textContent = '🎙️ Play Voice Briefing';
-      btn.style.color = '#38bdf8';
-      return;
-    }
-
-    if (!latestSitrepData) {
-      alert("Please wait for SITREP data to load.");
-      return;
-    }
-
-    const s = latestSitrepData;
-    const recs = (s.recommendations || []).slice(0, 2).join('. ') || 'All resource lines active.';
-    const text = `Disaster Relief Operational Briefing. ${s.narrative}. Active emergency zones: ${s.summary.active_zones}, with ${s.summary.critical_zones} critical sectors. Total units allocated: ${s.summary.total_allocations}. Key tactical recommendations: ${recs}. End of briefing.`;
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.05;
-    utterance.pitch = 0.95;
-    utterance.onend = () => {
-      isSpeaking = false;
-      btn.textContent = '🎙️ Play Voice Briefing';
-      btn.style.color = '#38bdf8';
-    };
-    utterance.onerror = () => {
-      isSpeaking = false;
-      btn.textContent = '🎙️ Play Voice Briefing';
-      btn.style.color = '#38bdf8';
-    };
-
-    window.speechSynthesis.speak(utterance);
-    isSpeaking = true;
-    btn.textContent = '⏹ Stop Voice Briefing';
-    btn.style.color = '#ef4444';
-  };
+  const topBtn = $('#sitrep-voice-briefing');
+  if (topBtn) {
+    topBtn.onclick = () => triggerVoiceBriefing();
+  }
+  const innerBtn = $('#btn-sitrep-speak-inner');
+  if (innerBtn) {
+    innerBtn.onclick = () => triggerVoiceBriefing();
+  }
 }
 
 window.runVoiceDemo = async () => {
@@ -675,53 +794,20 @@ $('#inventory-form').addEventListener('submit', async (e) => {
   renderInventory();
 });
 
-async function renderSitrep() {
-  try {
-    const s = await api('/api/sitrep');
-    $('#sitrep-content').innerHTML = `
-      <div class="sitrep-card" style="background:var(--card); padding:20px; border-radius:12px; border:1px solid var(--line);">
-        <h3 style="margin-top:0;">${esc(s.title)}</h3>
-        <div class="sitrep-narrative dim" style="margin-bottom:16px;">${esc(s.narrative)}</div>
-        
-        <h4>📊 Summary</h4>
-        <div class="strip">
-          ${Object.entries(s.summary).map(([k,v]) => `<div class="stat"><b>${v}</b><span>${k.replace(/_/g,' ')}</span></div>`).join('')}
-        </div>
-        
-        <h4>🏘️ Zone Status</h4>
-        <div class="cards">
-          ${s.zone_status.map(z => `<div class="card t-${z.tier}"><h3>${esc(z.name)} <span class="badge ${z.tier}">${z.tier}</span></h3><div class="dim">Score: ${z.severity_score} · Trend: ${z.trend || '—'} · Top gaps: ${(z.top_gaps||[]).join(', ') || 'none'}</div></div>`).join('')}
-        </div>
-        
-        <h4>📦 Resource Status</h4>
-        <table style="margin-bottom:16px;">
-          <tr><th>Category</th><th>Available</th><th>Burn Rate</th><th>Depletion ETA</th><th>Status</th></tr>
-          ${s.resource_status.map(r => `<tr><td>${r.category}</td><td>${r.available}</td><td>${r.burn_rate?.toFixed(1) || '0'}/hr</td><td>${r.hours_to_depletion != null ? (r.hours_to_depletion === Infinity ? '∞' : r.hours_to_depletion.toFixed(1) + 'h') : '—'}</td><td><span class="badge ${r.status}">${r.status}</span></td></tr>`).join('')}
-        </table>
-        
-        <h4>💡 Recommendations</h4>
-        <ul class="feed">${(s.recommendations||[]).map(r => `<li>🔸 ${esc(r)}</li>`).join('') || '<li class="dim">No recommendations at this time.</li>'}</ul>
-        
-        <h4>📋 Recent Actions</h4>
-        <ul class="feed">${(s.recent_actions||[]).map(feedRow).join('')}</ul>
-      </div>
-    `;
-  } catch(e) {
-    $('#sitrep-content').innerHTML = `<div class="banner">${esc(e.message)}</div>`;
-  }
-}
-$('#sitrep-refresh').onclick = renderSitrep;
-
 let latestSitrepData = null;
 
-const originalRenderSitrep = renderSitrep;
-renderSitrep = async function() {
+async function renderSitrep() {
   try {
     const s = await api('/api/sitrep');
     latestSitrepData = s;
     $('#sitrep-content').innerHTML = `
       <div class="sitrep-card" style="background:var(--card); padding:20px; border-radius:12px; border:1px solid var(--line);">
-        <h3 style="margin-top:0;">${esc(s.title)}</h3>
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
+          <h3 style="margin:0; font-size:18px; color:#38bdf8;">${esc(s.title)}</h3>
+          <button id="btn-sitrep-speak-inner" class="secondary" style="border-color:#38bdf8; color:#38bdf8; font-weight:700; padding:6px 14px; font-size:13px; display:inline-flex; align-items:center; gap:6px; cursor:pointer;">
+            🎙️ Play Voice Briefing
+          </button>
+        </div>
         <div class="sitrep-narrative dim" style="margin-bottom:16px;">${esc(s.narrative)}</div>
         
         <h4>📊 Summary</h4>
@@ -747,10 +833,13 @@ renderSitrep = async function() {
         <ul class="feed">${(s.recent_actions||[]).map(feedRow).join('')}</ul>
       </div>
     `;
+
+    setupVoiceBriefing();
   } catch(e) {
     $('#sitrep-content').innerHTML = `<div class="banner">${esc(e.message)}</div>`;
   }
-};
+}
+$('#sitrep-refresh').onclick = renderSitrep;
 
 if ($('#sitrep-export-md')) {
   $('#sitrep-export-md').onclick = () => {

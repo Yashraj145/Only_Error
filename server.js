@@ -449,8 +449,17 @@ app.get('/api/simulate/status', (_req, res) => {
 
 // ---------- static client (§8 screen map) ----------
 const publicDir = path.join(__dirname, 'public');
-app.use(express.static(publicDir));
-app.get('*', (_req, res) => res.sendFile(path.join(publicDir, 'index.html')));
+app.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+app.use(express.static(publicDir, { etag: false, maxAge: 0 }));
+app.get('*', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.sendFile(path.join(publicDir, 'index.html'));
+});
 
 const PORT = process.env.PORT || 3000;
 const isTest = process.env.NODE_ENV === 'test' || process.argv.some((arg) => arg.includes('test'));
