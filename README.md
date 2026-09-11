@@ -1,71 +1,46 @@
 # Only_Error — Disaster Relief & Emergency Resource Coordinator
 
-PS20 implementation of **master architecture v2**: nine component design reports
-unified into one system, with the v2 upgrade (dynamic re-allocation loop) built in.
+PS20 prototype with a Node/Express server, plain-function agents, shared in-memory collections and a responsive browser client.
 
-- **Backend:** Node.js (zero frameworks), in-memory tables, all agents as plain testable functions
-- **Frontend:** vanilla-JS mobile-responsive web client (no build step)
-- **Tests:** `node:test` — 15 unit + end-to-end tests
+## Run and verify
 
-## Run
-
-```bash
+```sh
 npm install
-node server.js        # → http://localhost:3000
-node --test           # run the test suite
+npm start
+npm test
 ```
 
-The server auto-seeds the §12 demo scenario (4 zones at mixed tiers; medical
-deliberately scarce — one batch of 12 kits pre-committed to Ward 3, undelivered).
-`POST /api/seed` resets to this state at any time.
+Open http://localhost:3000. Set PORT to choose a different port.
+See [DEMO.md](DEMO.md) for exact report values, expected scores and the rehearsal sequence.
 
-## Architecture mapping (doc → code)
+## Implemented workflow
 
-| Spec section | Code |
-|---|---|
-| §3 layers | `server.js` (API + static client) → `src/pipeline.js` (agents) → `src/store.js` (tables) |
-| §4 data model | `src/store.js` — AGENCIES, RESOURCE_ITEMS, ZONES, ALLOCATIONS, CLAIMS, AUDIT_LOG |
-| §5 optimization rule | `src/agents/allocation.js` (`rankZones`: tier → severity → gap ratio; greedy fill with partials) |
-| §5 re-allocation agent | `src/agents/reallocation.js` (MIN_RANK_ADVANTAGE, one open proposal per resource, no-op logging) |
-| §6 pipeline | `src/pipeline.js` (`submitReport` / `updateZone` / `mergeIntoZone`) |
-| §8 screen map | `public/` — Dashboard / Report / Inventory / Audit Log |
-| §9 agents | `src/agents/` — duplicate-report, claims, reallocation, allocation (+ needs/severity in `src/`) |
-| §10 API contract | `server.js` routes |
-| §12 demo script | seeded by `seedDemoData()`; reproducible via the UI |
+- Four assessed demo zones at critical/high/moderate/low tiers; Reset Demo clears the server scenario and ID counters.
+- Four-step reporting with review, manual location or optional browser GPS, and an offline local-storage queue.
+- Weighted duplicate-report detection with human Merge or Keep as New decisions.
+- Separate needs assessment and weighted severity scoring with a rescue override.
+- Tier → severity → gap-ratio allocation, reserving higher-ranked shares before consuming stock for lower-ranked zones.
+- Separate pending agency claims and delivery confirmation; duplicate-effort rejection names the commitment holder.
+- Category-specific, human-approved diversion proposals with stale-state checks and partial-balance preservation.
+- Per-resource inventory conservation, delivery history, restocking and committed-stock validation.
+- Existing-zone updates, critical-needs alerts, eight-second polling, score breakdowns and expandable audit entries.
+- Audit filters for zone, actor, action and resource.
 
-## API summary
+## Tests
 
-```
-GET  /api/zones                    GET  /zones/:id/score-breakdown
-POST /api/reports                  POST /zones/:id/claim
-POST /zones/:id/update             POST /zones/:id/deliver
-GET/POST /api/resource-items       GET  /api/allocations
-GET  /api/claims                   GET  /api/audit-log?zone=&actor=
-GET  /api/reallocations            POST /api/reallocations/:id/accept | :id/dismiss
-POST /api/allocations/:id/deliver  GET/POST /api/duplicate-flags(/:id/resolve)
-GET  /api/dashboard                POST /api/seed
-```
+23 tests cover the original agents plus deterministic seeding, allocation priority, multiple inventory rows, partial delivery, partial diversion, stale proposals, offline retry, and the complete HTTP demo including duplicate resolution and scarcity.
 
-## Demo flow (§12)
+## Layout
 
-1. Dashboard: 4 zones at mixed tiers, 12 medical kits committed to Ward 3.
-2. Submit **Ward 9** report with *Rescue needed* → hard override → **critical**
-   → re-allocation check → proposal card *"Divert 12 medical units Ward 3 → Ward 9?"*
-3. **Accept** → Ward 3's allocation becomes `diverted`; **Confirm delivery** on
-   Ward 9 → inventory decrements 12 → 0 (§6.9: decrement at delivery only).
-4. Update **Ward 7** (population doubles) → score jumps live → re-allocation
-   check posts its **no-op** row — the check is provably always on.
-5. Duplicate-report detection: resubmit Ward 3's location → banner → merge/dismiss.
-6. Ward 14 claims medical with empty stock → `partial` allocation + shortfall logged.
-7. Audit Log screen traces any zone end-to-end (§13 checklist).
+- src/store.js — seeded agencies, resources, zones, allocations, claims, audit rows and duplicate flags
+- src/pipeline.js — report creation, merge/update and assessment pipeline
+- src/agents/ — needs, severity, report matching, claims, allocation and re-allocation
+- server.js — Express API and static client
+- public/ — dashboard, report wizard, inventory, audit and offline queue
+- tests/ — agent, regression, API and offline tests
 
-## Documented deviations from v2 spec
+## Scope and limitations
 
-- `DUPLICATE_FLAGS`: a seventh in-memory collection carrying structured flag
-  state (components, open/merged/dismissed) for the dashboard banner; every flag
-  change still posts its own `AUDIT_LOG` row.
-- Delivery endpoints (`/zones/:id/deliver`, `/api/allocations/:id/deliver`)
-  implement §6.8–6.9 delivery confirmation; §4's `proposed → confirmed →
-  fulfilled` lifecycle is canonical (accepted diversions deliver directly).
-- `populationPressure` term in severity scoring (named, justified in code) makes
-  "population doubles → score jumps" (§12 step 4) observable.
+This is the architecture's responsive-web fallback, not an Expo/Flutter app. The backend is intentionally in memory. Restarting it clears reports, deliveries and request-id deduplication. Offline reports stay in browser storage and retry while the page is active; offline-first cold launch and native background sync are not implemented. Agency selection is for a demo, not authenticated authorization. Severity constants are illustrative, not operationally validated emergency-response models.
+
+Allocation lifecycle is explicit: confirmed means committed and undelivered; fulfilled/partial means delivery was recorded. Diverted rows preserve history and are excluded from active-allocation totals. A seventh collection stores duplicate-review flags. Scoring refreshes after inventory or allocation changes so displayed needs reflect the shared state.

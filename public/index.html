@@ -18,9 +18,12 @@
   </header>
 
   <main id="app">
+    <p id="connection-status" role="status" aria-live="polite"></p>
     <!-- DASHBOARD -->
     <section id="screen-dashboard" class="screen active">
+      <button id="reset-demo" class="secondary">Reset Demo</button>
       <div id="status-strip" class="strip"></div>
+      <div id="critical-needs"></div>
       <div id="dup-banner"></div>
       <div id="proposal-card"></div>
       <h2>Priority-ranked zone list</h2>
@@ -35,15 +38,21 @@
     <section id="screen-report" class="screen">
       <h2>Zone report</h2>
       <form id="report-form">
+        <p id="report-step-label">Step 1 of 4 · Zone details</p>
+        <div data-report-step="0">
         <label>Zone name<input name="name" required placeholder="Ward 9" /></label>
         <label>Location / landmark<input name="location" required placeholder="Ward 9, West District" /></label>
         <label>Population affected<input name="population_affected" type="number" min="0" value="500" /></label>
+        <button id="use-location" type="button" class="secondary">Use my location</button><p class="dim">You can also type a landmark or district manually.</p>
+        </div><div data-report-step="1" hidden>
         <fieldset><legend>Resource needs</legend>
           <div id="need-chips" class="chips"></div>
         </fieldset>
+        </div><div data-report-step="2" hidden>
         <label class="check"><input type="checkbox" name="rescue_needed" /> Rescue needed (hard override → critical)</label>
         <label class="check"><input type="checkbox" name="urgency_high" /> Reporter flags situation urgent (×1.2)</label>
-        <button type="submit">Submit report</button>
+        </div><div data-report-step="3" id="report-review" hidden></div>
+        <div class="row"><button type="button" id="report-back" class="secondary" hidden>Back</button><button type="button" id="report-next">Next</button><button type="submit" id="report-submit" hidden>Confirm Report</button></div>
         <div id="report-result"></div>
       </form>
     </section>
@@ -69,6 +78,8 @@
       <div class="filters">
         <input id="audit-zone" placeholder="filter by zone id (e.g. Z2)" />
         <input id="audit-actor" placeholder="filter by actor" />
+        <input id="audit-action" placeholder="action (e.g. REALLOCATION_CHECK)" />
+        <input id="audit-resource" placeholder="resource (e.g. RES1)" />
         <button id="audit-refresh">Refresh</button>
       </div>
       <ul id="audit-list" class="feed"></ul>

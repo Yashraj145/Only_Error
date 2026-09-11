@@ -3,6 +3,11 @@
   --critical: #e5484d; --high: #f76b15; --moderate: #f5d90a; --low: #46a758; --accent: #3e63dd;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
+button:disabled { opacity: .55; cursor: wait; }
+input { max-width: 100%; min-width: 0; }
+[data-report-step] { display: grid; gap: 12px; }
+summary { cursor: pointer; }
 body { margin: 0; font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--text); }
 .topbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
 .brand { font-weight: 700; }

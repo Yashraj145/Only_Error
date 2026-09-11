@@ -13,6 +13,7 @@ import { runReallocationCheck } from './agents/reallocation.js';
 export function runAssessmentPipeline(zone, actor) {
   // Steps 3–4: needs assessment, then severity scoring — two separate agents (§13).
   assessNeeds(zone);
+  audit({ actor, action_type: 'NEEDS_ASSESSED', zone_id: zone.zone_id, description: `Resource gaps: ${JSON.stringify(zone.gaps)}` });
   const scoring = scoreZone(zone);
   audit({
     actor,
@@ -35,6 +36,10 @@ export function submitReport(report, actor = 'field-reporter') {
   if (flag) {
     return { status: 'duplicate', flag, zone_id: flag.matched_zone_id, message: `Possible duplicate of ${zoneName(flag.matched_zone_id)} — coordinator review required` };
   }
+  return createZone(report, actor);
+}
+
+export function createZone(report, actor = 'field-reporter') {
   const now = new Date().toISOString();
   const zone = {
     zone_id: `Z${String(store.ZONES.length + 1).padStart(2, '0')}`,
@@ -48,6 +53,7 @@ export function submitReport(report, actor = 'field-reporter') {
     override_applied: false, created_at: now, updated_at: now,
   };
   store.ZONES.push(zone);
+  audit({ actor, action_type: 'DUPLICATE_CHECK_PASSED', zone_id: zone.zone_id, description: 'New report accepted after duplicate check or coordinator review' });
   audit({ actor, action_type: 'REPORT_CREATED', zone_id: zone.zone_id, description: `New zone report: ${zone.name} (${zone.location}) — population ${zone.population_affected}, needs [${zone.needs.join(', ')}]${zone.rescue_needed ? ', RESCUE NEEDED' : ''}` });
   const result = runAssessmentPipeline(zone, actor);
   return { status: 'new', flag: null, zone_id: zone.zone_id, ...result };

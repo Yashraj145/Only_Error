@@ -3,6 +3,7 @@
 // Accepts or Dismisses from the dashboard card. Nothing auto-diverts (§13).
 import { store, nextId, TIER_ORDER, isUndelivered, zoneName } from '../store.js';
 import { audit } from '../audit.js';
+import { rankZones, criterionWon, refreshAssessments } from './allocation.js';
 
 // A diversion must be clearly justified, not a tie-break (§5).
 export const MIN_RANK_ADVANTAGE_TIERS = 1; // at least one full tier
@@ -34,7 +35,7 @@ export function runReallocationCheck(zone, actor = 'system:reallocation-agent') 
 
   // Candidate diversions: undelivered allocations to LOWER-ranked zones.
   const candidates = store.ALLOCATIONS.filter((a) => {
-    if (!isUndelivered(a) || a.category === 'rescue') return false; // rescue teams: single-hop limit
+    if (!isUndelivered(a) || !(zone.gaps?.[a.category] > 0)) return false;
     const receiving = store.ZONES.find((z) => z.zone_id === a.zone_id);
     return receiving && outranks(updatedRank, rank(receiving));
   });
@@ -53,7 +54,9 @@ export function runReallocationCheck(zone, actor = 'system:reallocation-agent') 
   candidates.sort((a, b) => {
     const ra = rank(store.ZONES.find((z) => z.zone_id === a.zone_id));
     const rb = rank(store.ZONES.find((z) => z.zone_id === b.zone_id));
-    return rb.tier - ra.tier || ra.severity - rb.severity; // lowest first
+    const za = store.ZONES.find(z => z.zone_id === a.zone_id);
+    const zb = store.ZONES.find(z => z.zone_id === b.zone_id);
+    return rb.tier - ra.tier || rb.severity - ra.severity || (rankZones([za, zb], a.category)[0] === za ? 1 : -1);
   });
   let source = null;
   for (const candidate of candidates) {
@@ -75,19 +78,21 @@ export function runReallocationCheck(zone, actor = 'system:reallocation-agent') 
   const criterion = updatedRank.tier < rank(store.ZONES.find((z) => z.zone_id === source.zone_id)).tier
     ? 'tier'
     : 'severity_score';
+  const quantity = Math.min(source.quantity, zone.gaps[source.category]);
   const proposal = {
     allocation_id: nextId('ALC'),
     resource_id: source.resource_id,
     category: source.category,
     zone_id: source.zone_id,          // from_zone while status = proposed
-    quantity: source.quantity,
+    quantity,
+    agency_id: source.agency_id || store.RESOURCE_ITEMS.find(r => r.resource_id === source.resource_id)?.agency_id,
     status: 'proposed',
-    claimed_quantity: source.quantity,
+    claimed_quantity: quantity,
     shortfall: 0,
     reallocated_from: source.zone_id,
     reallocated_to: zone.zone_id,
     source_allocation_id: source.allocation_id,
-    reason_text: `${source.quantity} ${source.category} units re-targeted ${zoneName(source.zone_id)} → ${zoneName(zone.zone_id)} — new ${zone.tier} zone, higher unmet severity (criterion: ${criterion})`,
+    reason_text: `${quantity} ${source.category} units re-targeted ${zoneName(source.zone_id)} → ${zoneName(zone.zone_id)} — ${zone.tier} zone (criterion: ${criterion})`,
     timestamp: new Date().toISOString(),
   };
   store.ALLOCATIONS.push(proposal);
@@ -96,7 +101,8 @@ export function runReallocationCheck(zone, actor = 'system:reallocation-agent') 
     action_type: 'REALLOCATION_PROPOSED',
     zone_id: zone.zone_id,
     allocation_id: proposal.allocation_id,
-    description: `Proposal: divert ${source.quantity} ${source.category} units ${zoneName(source.zone_id)} → ${zoneName(zone.zone_id)} — ${zone.name} is ${zone.tier} (score ${zone.severity_score}); awaiting coordinator decision`,
+    resource_id: source.resource_id,
+    description: `Proposal: divert ${quantity} ${source.category} units ${zoneName(source.zone_id)} → ${zoneName(zone.zone_id)} — ${zone.name} is ${zone.tier} (score ${zone.severity_score}); awaiting coordinator decision`,
   });
   return proposal;
 }
@@ -107,6 +113,16 @@ export function acceptProposal(proposalId, actor) {
   const proposal = store.ALLOCATIONS.find((a) => a.allocation_id === proposalId && a.status === 'proposed');
   if (!proposal) return null;
   const source = store.ALLOCATIONS.find((a) => a.allocation_id === proposal.source_allocation_id);
+  const destination = store.ZONES.find(z => z.zone_id === proposal.reallocated_to);
+  const origin = source && store.ZONES.find(z => z.zone_id === source.zone_id);
+  if (!source || !isUndelivered(source) || source.quantity < proposal.quantity || !destination || !(destination.gaps?.[proposal.category] >= proposal.quantity) || !origin || !outranks(rank(destination), rank(origin))) {
+    throw Object.assign(new Error('Proposal is stale; dismiss it and refresh the situation'), { status: 409 });
+  }
+  if (source.quantity > proposal.quantity) {
+    store.ALLOCATIONS.push({ ...source, allocation_id: nextId('ALC'), quantity: source.quantity - proposal.quantity, reason_text: 'Undiverted balance of ' + source.allocation_id });
+    source.quantity = proposal.quantity;
+  }
+  proposal.reason_text = `${proposal.quantity} ${proposal.category} re-targeted ${origin.name} → ${destination.name} (criterion: ${criterionWon(destination, origin, proposal.category)})`;
   proposal.status = 'confirmed';
   // Once accepted, the units are committed to the RECEIVING zone — its claim
   // grid shows the diverted batch pre-marked, and duplicate-effort detection
@@ -119,10 +135,12 @@ export function acceptProposal(proposalId, actor) {
   audit({
     actor,
     action_type: 'REALLOCATION_ACCEPTED',
+    resource_id: proposal.resource_id,
     zone_id: proposal.reallocated_to,
     allocation_id: proposal.allocation_id,
     description: `Re-allocation accepted by ${actor} — ${proposal.reason_text}`,
   });
+  refreshAssessments(actor);
   return { proposal, source };
 }
 
@@ -134,6 +152,7 @@ export function dismissProposal(proposalId, actor) {
   audit({
     actor,
     action_type: 'REALLOCATION_DISMISSED',
+    resource_id: proposal.resource_id,
     zone_id: proposal.reallocated_from,
     allocation_id: proposal.allocation_id,
     description: `Re-allocation dismissed by ${actor} — ${zoneName(proposal.reallocated_from)} keeps ${proposal.quantity} ${proposal.category} units`,

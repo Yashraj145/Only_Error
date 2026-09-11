@@ -12,10 +12,10 @@ import { TIER_ORDER } from '../src/store.js';
 
 test('needs assessment: gaps = benchmarked need minus available supply', () => {
   seedDemoData();
-  const z2 = getZone('Z2'); // Ward 7: 800 people, water
+  const z2 = getZone('Z2'); // Ward 7: 2000 people, water
   assessNeeds(z2);
-  assert.equal(z2.benchmarked_needs.water, 15 * 800 * 3); // 15L/person/day × 3 days
-  assert.equal(z2.gaps.water, 0); // 36000 needed, 60000 stocked
+  assert.equal(z2.benchmarked_needs.water, 15 * 2000 * 3);
+  assert.equal(z2.gaps.water, 30000); // 90000 needed, 60000 stocked
 });
 
 test('needs assessment: committed undelivered stock counts as supply', () => {

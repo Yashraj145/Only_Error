@@ -8,6 +8,8 @@
 // a flat AUDIT_LOG row cannot carry. Every flag change also posts an AUDIT_LOG
 // row, so the audit trail stays complete (see README — documented deviation).
 
+import { assessNeeds } from './agents/needsAssessment.js';
+import { scoreZone } from './agents/severityScoring.js';
 export const CATEGORIES = ['water', 'medical', 'food', 'shelter', 'rescue'];
 export const TIER_ORDER = { critical: 0, high: 1, moderate: 2, low: 3 };
 export const ALLOCATION_STATUSES = ['proposed', 'confirmed', 'partial', 'fulfilled', 'diverted'];
@@ -91,7 +93,7 @@ export function seedDemoData() {
     // §12: Zone 1 high/medical — holds the scarce medical stock
     { zone_id: 'Z1', name: 'Ward 3', location: 'Ward 3, North District', population_affected: 1200, needs: ['medical', 'food'], rescue_needed: false, urgency_high: false },
     // §12: Zone 2 moderate/water
-    { zone_id: 'Z2', name: 'Ward 7', location: 'Ward 7, East District', population_affected: 800, needs: ['water'], rescue_needed: false, urgency_high: false },
+    { zone_id: 'Z2', name: 'Ward 7', location: 'Ward 7, East District', population_affected: 2000, needs: ['water'], rescue_needed: false, urgency_high: false },
     // §12: Zone 3 low/food
     { zone_id: 'Z3', name: 'Ward 11', location: 'Ward 11, South District', population_affected: 300, needs: ['food'], rescue_needed: false, urgency_high: false },
     // §12: Zone 4 critical/shelter (rescue flag fires the hard override)
@@ -105,12 +107,14 @@ export function seedDemoData() {
   // §12: the scarce medical batch is already committed (confirmed, NOT yet
   // delivered) to Ward 3 — this is the stock the re-allocation demo diverts.
   store.ALLOCATIONS.push({
-    allocation_id: 'ALC001', resource_id: 'RES1', zone_id: 'Z1', category: 'medical',
+    allocation_id: nextId('ALC'), resource_id: 'RES1', agency_id: 'AG3', zone_id: 'Z1', category: 'medical',
     quantity: 12, status: 'confirmed', claimed_quantity: 12, shortfall: 0,
     reallocated_from: null, reallocated_to: null,
     reason_text: '12 medical kits sent to Ward 3 — highest unmet severity among zones needing medical supplies (criterion: severity_score)',
     timestamp: now,
   });
 
+  // Bootstrap computes real scores without creating proposals or activity.
+  for (const zone of store.ZONES) { assessNeeds(zone); scoreZone(zone); }
   return { zones: store.ZONES.length, resource_items: store.RESOURCE_ITEMS.length, allocations: store.ALLOCATIONS.length };
 }

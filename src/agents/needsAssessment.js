@@ -39,7 +39,8 @@ export function supplyFor(zone, category) {
   const committedToZone = store.ALLOCATIONS
     .filter((a) => a.zone_id === zone.zone_id && a.category === category && isUndelivered(a))
     .reduce((sum, a) => sum + a.quantity, 0);
-  return uncommittedSupply(category) + committedToZone;
+  const delivered = store.ALLOCATIONS.filter(a => a.zone_id === zone.zone_id && a.category === category && ['fulfilled', 'partial'].includes(a.status)).reduce((s, a) => s + a.quantity, 0);
+  return uncommittedSupply(category) + committedToZone + delivered;
 }
 
 // Returns and writes { benchmarked_needs, gaps } onto the zone. Rescue needs are
