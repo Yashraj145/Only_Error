@@ -33,6 +33,15 @@ test('simulation SSE sends named progress and completion events', { timeout: 100
     const status = await (await fetch(`${base}/api/simulate/status`)).json();
     assert.equal(status.running, false);
     assert.equal(status.events_completed, 6);
+    assert.equal(status.status, 'completed');
+    await fetch(`${base}/api/simulate/start`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scenario: 'flood_escalation', speed: 1 }),
+    });
+    await fetch(`${base}/api/simulate/stop`, { method: 'POST' });
+    const stopped = await (await fetch(`${base}/api/simulate/status`)).json();
+    assert.equal(stopped.status, 'stopped');
+    assert.equal(stopped.running, false);
   } finally {
     controller.abort();
     stopSimulation();

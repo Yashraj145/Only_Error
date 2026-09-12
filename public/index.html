@@ -53,6 +53,7 @@
   <main id="app" tabindex="-1">
     <div class="page-heading"><div><p class="eyebrow">RELIEF OPERATIONS</p><h1 id="page-title">Response overview</h1><p id="page-description">Prioritise urgent needs and coordinate the next response.</p></div><button id="new-report">+ Report incident</button></div>
     <p id="connection-status" role="status" aria-live="polite"></p>
+    <p id="app-status" class="dim" role="status" aria-live="polite"></p>
     <!-- DASHBOARD -->
     <section id="screen-dashboard" class="screen active">
       <div id="status-strip" class="strip"></div>
@@ -118,6 +119,7 @@
               <b>Voice report</b>
               <span class="dim">Record or upload an audio message.</span>
             </div>
+            <p id="voice-status" class="dim" role="status" aria-live="polite">Checking audio service…</p>
             
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; align-items:center;">
               <button id="btn-record-mic" type="button" class="mic-btn" style=" padding:8px 16px; display:inline-flex; align-items:center; gap:8px;">

@@ -46,6 +46,7 @@ export const SCENARIOS = {
 };
 
 let simulationState = {
+  status: 'idle',
   running: false,
   scenario: null,
   speed: 1,
@@ -70,6 +71,7 @@ export function startSimulation(scenarioKey, speed = 1, broadcastFn = null) {
   }
 
   simulationState = {
+    status: 'running',
     running: true,
     scenario: scenario,
     speed: speed,
@@ -122,12 +124,14 @@ export function startSimulation(scenarioKey, speed = 1, broadcastFn = null) {
           });
         }
       } catch (error) {
+        simulationState.status = 'failed';
         console.error('Simulation event error:', error);
       }
 
       // Check if this was the last event
       if (index === totalEvents - 1) {
         simulationState.running = false;
+        if (simulationState.status !== 'failed') simulationState.status = 'completed';
         if (broadcastFn) {
           broadcastFn({ type: 'simulation_complete' });
         }
@@ -142,6 +146,7 @@ export function startSimulation(scenarioKey, speed = 1, broadcastFn = null) {
  * Stops the currently running simulation.
  */
 export function stopSimulation() {
+  if (simulationState.running) simulationState.status = 'stopped';
   if (simulationState.timers) {
     simulationState.timers.forEach(timer => clearTimeout(timer));
   }
@@ -164,6 +169,7 @@ export function setSpeed(speed) {
  */
 export function getSimulationStatus() {
   return {
+    status: simulationState.status,
     running: simulationState.running,
     scenario_name: simulationState.scenario ? simulationState.scenario.name : null,
     speed: simulationState.speed,

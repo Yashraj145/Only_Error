@@ -1,37 +1,33 @@
-# PS20 rehearsal guide
+# Sanjeevani rehearsal guide
 
-## Start
+## Start and protect the demo
 
-In C:\Users\anujo\Documents\Codex\Only_Error run npm install, then npm start.
-Open http://localhost:3000. The preview started during implementation uses http://localhost:3010.
-Run npm test to execute the 23 unit, regression, offline-queue and HTTP integration tests.
+Run `npm install`, set up the Python environment described in README, then run `npm start` from the repository. Open http://localhost:3000. The final isolated rehearsal server uses http://localhost:3300 and `data/rehearsal.json`; earlier workspaces were not reset.
 
-## Six-minute demonstration
+Operational data and audit history are saved in `data/workspace.json` by default. Restarting restores them. Reset Demo and starting a fresh simulation explicitly replace the saved workspace with seed data. Do not reset incidents you need to keep. Use a separate `SANJEEVANI_STATE_FILE` for practice.
 
-1. Reset Demo. Confirm exactly four zones: Ward 14 critical (60), Ward 3 high (44), Ward 7 moderate (18), Ward 11 low (10). Medical inventory is 12 kits, committed to Ward 3; no proposal is open.
-2. Open Report. Enter Ward 9, location Ward 9, West District, population 1000. Deselect water; select medical. Enable Rescue needed. Review and Confirm Report, then open Dashboard.
-3. Accept the proposal to divert 12 medical kits from Ward 3 to Ward 9. Inventory stays at 12. Open Ward 9 details and attempt a medical claim from Relief Corps: it is rejected with MedAir International named as the existing commitment holder. Confirm delivery (12). Inventory becomes zero; allocation becomes fulfilled.
-4. Open Ward 7 details → Update Situation. Change population from 2000 to 4000 and save. Score rises from 18 to 55, tier becomes high. The resource-specific re-allocation check logs no change because no undelivered water allocation can be diverted. Use Audit Log, zone Z2, action REALLOCATION_CHECK to show this.
-5. Demonstrate ordinary coordination in Ward 7: enter quantity 5000 and Claim with City Fire Department. The claim remains pending and water inventory stays 60000. A second agency claim is rejected. Confirm Delivery separately: water stock becomes 55000.
-6. Submit another Ward 3 report at Ward 3, North District, population 1200, medical selected. Review the duplicate banner and Merge. For a separate optional demonstration, Keep as new report creates a scored zone instead of dropping the incoming report.
-7. Open Ward 14 → Update Situation, add medical to shelter, save. Claim medical quantity 18, then Confirm Delivery. With zero medical inventory the result is partial, delivered 0, shortfall 18.
-8. Open Audit Log and filter by Ward 9's zone ID (Z05 in a fresh run), or resource RES1. Expand entries to show proposal, acceptance and delivery as distinct actions. Clear filters to browse the complete activity history.
+Run `npm test`: the final automated suite has 37 passing tests.
 
-Reset before repeating the recording. Do not restock medical before the scarcity step.
+## One-minute backup demo / live narration
 
-## Optional offline demonstration
+1. Start with a fresh, isolated demo workspace. Show the four seeded zones and 12 medical kits committed to Ward 3.
+2. Report **Ward 9**, location **Ward 9, West District**, population **1000**. Select medical needs and **Rescue needed**. Review the fields and explicitly Confirm Report.
+3. Explain the critical priority: rescue is a hard override. Accept the proposed diversion of 12 medical kits from Ward 3 to Ward 9. This is a coordinator decision, not an automatic delivery.
+4. Open Ward 9 and confirm delivery of 12 kits. Show medical stock falling to zero.
+5. Open Activity log, filter by the new zone ID (Z05 on a fresh seed), and expand entries. Show reporting, needs assessment, scoring, proposal, acceptance and delivery as distinct events.
+6. Finish on the situation report: one emergency, one explainable priority decision, one coordinated delivery, and a traceable history.
 
-Keep the application loaded, disconnect the network, and submit a synthetic report. The report is saved in browser local storage and displayed as queued. Reconnect while the tab is open; the queue retries in order. Request IDs make retries idempotent within the current server session. Queued reports await authoritative server scoring; there is no provisional score displayed.
+The supplied `Sanjeevani-backup-demo.webm` is a silent, approximately 60-second recording of this actual browser workflow. Keep a local copy available before presenting; narrate the steps above while it plays.
 
-## Implementation decisions
+## Optional voice and persistence proof
 
-- The client remains the responsive web fallback allowed by the architecture document.
-- Ranking reserves higher-priority zones' shares before a lower-ranked zone can consume scarce stock, even when the higher-priority zone has not yet claimed it.
-- Claims coordinate intent; delivery creates fulfilled/partial records. Accepted diversions remain confirmed until explicit delivery.
-- Partial diversions and partial committed deliveries preserve the undelivered balance in a separate record.
-- Restocking reactivates depleted inventory. Inventory cannot be reduced below its existing commitments.
-- Every score refresh logs assessment, scoring and a re-allocation proposal or no-op check.
-- Ward 7's starting population was adjusted to 2000 to obtain the specified moderate tier using actual scoring. The original 800-person fixture had no water deficit.
-- All data except queued browser reports is in memory and resets on server restart. This is a demonstration prototype, without authentication or durable multi-user storage.
-- Offline retry requires the page to remain open or be reopened when online; it is not an installed background-sync mobile application.
-- GPS capture uses the browser's permission-based location feature, with manual landmark entry as fallback. It was not exercised using the user's real location.
+- Analyze a voice sample. Show the transcript and extracted form fields. Analysis creates only a draft, not an incident.
+- Edit the transcript or fields, then use the normal review and Confirm Report steps. If audio has no transcript, supply details manually; no sample incident is invented.
+- Restart the same server using the same snapshot path, then show that the incident, inventory and audit history remain.
+
+## Limits to state honestly
+
+- This is a single-process local-snapshot prototype, not a production database or authenticated emergency service. Keep snapshots backed up and avoid multiple processes sharing one snapshot file.
+- Voice readiness checks the local audio-analysis runtime; it does not prove microphone permission or provide automatic transcription. Physical-phone and real-microphone testing remain separate checks.
+- Offline reports queue in the browser and retry when the page is open and online. This is not background mobile sync. Request-ID deduplication survives server restarts through the snapshot.
+- Claims reserve intent; only explicit delivery consumes stock. Simulation start resets its workspace after confirmation.

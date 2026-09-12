@@ -1,6 +1,6 @@
 # Sanjeevani — Disaster Relief & Emergency Resource Coordinator
 
-PS20 prototype with a Node/Express server, plain-function agents, shared in-memory collections and a responsive browser client.
+PS20 prototype with a Node/Express server, plain-function agents, shared operational collections with local snapshot persistence, and a responsive browser client.
 
 ## Run and verify
 
@@ -27,6 +27,9 @@ See [DEMO.md](DEMO.md) for exact report values, expected scores and the rehearsa
 
 ## Implemented workflow
 
+- Local snapshots preserve incidents, inventories, allocations, commitments, audit history and request deduplication across restarts. The default file is `data/workspace.json`, excluded from Git. Set `SANJEEVANI_STATE_FILE` to choose a different file. Run only one server per snapshot file. Tests normally disable persistence or use isolated files.
+- Voice analysis produces a draft. Review/edit its transcript and incident fields in the existing form, then use Confirm Report to create the incident. Audio without a transcript leaves the location blank and asks for manual details.
+
 - Four assessed demo zones at critical/high/moderate/low tiers; Reset Demo clears the server scenario and ID counters.
 - Four-step reporting with review, manual location or optional browser GPS, and an offline local-storage queue.
 - Weighted duplicate-report detection with human Merge or Keep as New decisions.
@@ -40,7 +43,7 @@ See [DEMO.md](DEMO.md) for exact report values, expected scores and the rehearsa
 
 ## Tests
 
-23 tests cover the original agents plus deterministic seeding, allocation priority, multiple inventory rows, partial delivery, partial diversion, stale proposals, offline retry, and the complete HTTP demo including duplicate resolution and scarcity.
+37 tests cover agents, allocation conservation, the complete HTTP demo, simulation events, voice review without automatic submission, missing transcripts, restart snapshot restoration, corrupt snapshot handling, and offline retry.
 
 ## Layout
 
@@ -53,6 +56,6 @@ See [DEMO.md](DEMO.md) for exact report values, expected scores and the rehearsa
 
 ## Scope and limitations
 
-This is the architecture's responsive-web fallback, not an Expo/Flutter app. The backend is intentionally in memory. Restarting it clears reports, deliveries and request-id deduplication. Offline reports stay in browser storage and retry while the page is active; offline-first cold launch and native background sync are not implemented. Agency selection is for a demo, not authenticated authorization. Severity constants are illustrative, not operationally validated emergency-response models.
+This is the architecture's responsive-web fallback, not an Expo/Flutter app. The backend loads a local JSON snapshot on startup and saves before acknowledging changes and publishing events. Atomic replacement protects against partial snapshot writes. An invalid snapshot stops startup instead of silently resetting history. This single-process storage is not a multi-user production database or a backup service. Reset Demo and Launch Simulation intentionally replace the workspace with seeded data and save that reset. Simulation timers do not resume after restart, but completed event history remains. Older running versions have no snapshot export, so their memory is not automatically migrated. Offline reports stay in browser storage and retry while the page is active; offline-first cold launch and native background sync are not implemented. Agency selection is for a demo, not authenticated authorization. Severity constants are illustrative, not operationally validated emergency-response models.
 
 Allocation lifecycle is explicit: confirmed means committed and undelivered; fulfilled/partial means delivery was recorded. Diverted rows preserve history and are excluded from active-allocation totals. A seventh collection stores duplicate-review flags. Scoring refreshes after inventory or allocation changes so displayed needs reflect the shared state.

@@ -22,17 +22,33 @@ import { startSimulation, stopSimulation, setSpeed, getSimulationStatus, SCENARI
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
+import { snapshotStore } from './src/persistence.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.use(express.json({ limit: '20mb' }));
 
-seedDemoData(); // §12 setup — reset via POST /api/seed
+const isTest = process.env.NODE_ENV === 'test' || process.argv.some((arg) => arg.includes('test'));
+const requests = new Map();
+const persistence = !isTest || process.env.SANJEEVANI_STATE_FILE
+  ? snapshotStore(process.env.SANJEEVANI_STATE_FILE || path.join(__dirname, 'data', 'workspace.json'), store, requests)
+  : null;
+// Fail startup on an unreadable/corrupt snapshot instead of overwriting history.
+if (!persistence?.load()) { seedDemoData(); persistence?.save(); }
+app.use((req, res, next) => {
+  const json = res.json.bind(res);
+  res.json = body => {
+    if (req.method === 'POST' && res.statusCode < 500) persistence?.save();
+    return json(body);
+  };
+  next();
+});
 
 // ---------- SSE real-time push ----------
 const sseClients = new Set();
 
 function broadcast(eventType, payload) {
+  persistence?.save();
   const data = JSON.stringify({ type: eventType, payload, timestamp: new Date().toISOString() });
   for (const res of sseClients) {
     res.write(`event: update\ndata: ${data}\n\n`);
@@ -55,7 +71,6 @@ app.get('/api/events', (req, res) => {
 global.__broadcast = broadcast;
 
 const actorOf = (req) => req.get('x-actor') || req.body?.actor || 'coordinator';
-const requests = new Map();
 function validateReport(body, partial = false) {
   if (!partial && (typeof body.name !== 'string' || !body.name.trim() || typeof body.location !== 'string' || !body.location.trim())) throw Object.assign(new Error('Name and location are required'), { status: 400 });
   if ((!partial || body.population_affected != null) && (!Number.isInteger(body.population_affected) || body.population_affected < 0)) throw Object.assign(new Error('Population must be a nonnegative integer'), { status: 400 });
@@ -285,7 +300,7 @@ app.get('/api/dashboard', (_req, res) => {
 });
 
 // Demo reset (§12 setup) — reseeds the exact 4-zone scenario.
-app.post('/api/seed', (_req, res) => { requests.clear(); res.json(seedDemoData()); });
+app.post('/api/seed', (_req, res) => { stopSimulation(); requests.clear(); res.json(seedDemoData()); });
 app.use((error, _req, res, _next) => res.status(error.status || 500).json({ error: error.message }));
 
 // ---------- new agents ----------
@@ -372,6 +387,13 @@ app.get('/api/voice-samples', (_req, res) => {
   })));
 });
 
+app.get('/api/voice-ready', async (_req, res) => {
+  try {
+    const result = await analyzeAudioWithPython('--test');
+    res.json({ ready: result.has_librosa === true });
+  } catch { res.json({ ready: false }); }
+});
+
 app.post('/api/voice-report', async (req, res) => {
   const { sample_name, audio_base64, transcript: clientTranscript } = req.body;
   let audioPath = null;
@@ -397,16 +419,9 @@ app.post('/api/voice-report', async (req, res) => {
       fs.unlink(audioPath).catch(() => {});
     }
 
-    if (!transcript) {
-      if (acoustic.distress_score >= 70) {
-        transcript = 'Mayday! Flash flood in Ward 9, multiple residents trapped on roofs, medical and rescue teams needed immediately!';
-      } else {
-        transcript = 'Routine status report: Sector 11 relocation camp operating normally, requesting 50 food ration packs.';
-      }
-    }
-
     const natural = parseNaturalReport(transcript);
     const parsed = { ...natural.parsed };
+    if (!natural.extraction_details.location_match) { parsed.name = ''; parsed.location = ''; }
 
     // Apply acoustic distress overrides derived from Librosa
     if (acoustic.distress_score >= 70 || acoustic.urgency_level === 'CRITICAL_DISTRESS') {
@@ -416,24 +431,13 @@ app.post('/api/voice-report', async (req, res) => {
       parsed.urgency_high = true;
     }
 
-    if (!parsed.name) parsed.name = 'Ward 9';
-    if (!parsed.location) parsed.location = `${parsed.name}, Emergency Zone`;
-
-    const reportResult = submitReport(parsed, actorOf(req));
-
-    broadcast('zone_update', {
-      action: 'voice_dispatch_created',
-      zone_id: reportResult.zone_id,
-      distress_score: acoustic.distress_score,
-      urgency_level: acoustic.urgency_level
-    });
-
     res.json({
       success: true,
       transcript,
       acoustic,
       parsed,
-      report_result: reportResult
+      review_required: true,
+      transcript_missing: !transcript.trim()
     });
   } catch (err) {
     if (isTemp && audioPath) fs.unlink(audioPath).catch(() => {});
@@ -452,6 +456,7 @@ app.post('/api/simulate/start', (req, res) => {
   if (!scenario || !SCENARIOS[scenario]) return res.status(400).json({ error: 'valid scenario key required', available: Object.keys(SCENARIOS) });
   try {
     seedDemoData(); // reset to clean state
+    requests.clear();
     const result = startSimulation(scenario, speed || 1, ({ type, ...payload }) => broadcast(type, payload));
     res.json(result);
   } catch (e) {
@@ -489,7 +494,6 @@ app.get('*', (_req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-const isTest = process.env.NODE_ENV === 'test' || process.argv.some((arg) => arg.includes('test'));
 if (!isTest) {
   app.listen(PORT, () => console.log(`Sanjeevani relief coordinator on http://localhost:${PORT}`));
 }

@@ -182,6 +182,11 @@ function show(screen) {
   const alreadyVisible = state.screen === screen && $(`#screen-${screen}`).classList.contains('active');
   if (alreadyVisible) return;
   state.screen = screen;
+  $('#app-status').textContent = screen === 'report' ? '' : 'Loading…';
+  const loadScreen = async work => {
+    try { await work(); if (state.screen === screen) $('#app-status').textContent = ''; }
+    catch (error) { if (state.screen === screen) reportError(error); }
+  };
   $('#page-title').textContent = screens[screen][0];
   $('#page-description').textContent = screens[screen][1];
   $('#new-report').hidden = screen === 'report';
@@ -194,17 +199,17 @@ function show(screen) {
   document.querySelectorAll('#nav button').forEach(b => b.setAttribute('aria-current', b.dataset.screen === screen ? 'page' : 'false'));
   if (screen === 'dashboard') {
     initMap();
-    renderDashboard();
+    loadScreen(renderDashboard);
     requestAnimationFrame(() => { if (map && state.screen === 'dashboard') map.invalidateSize({ pan: false }); });
   }
   if (screen === 'report') setupVoiceDispatcher();
-  if (screen === 'inventory') renderInventory();
-  if (screen === 'audit') renderAudit();
+  if (screen === 'inventory') loadScreen(renderInventory);
+  if (screen === 'audit') loadScreen(renderAudit);
   if (screen === 'sitrep') {
-    renderSitrep();
+    loadScreen(renderSitrep);
     setupVoiceBriefing();
   }
-  if (screen === 'simulation') renderSimulation();
+  if (screen === 'simulation') loadScreen(renderSimulation);
 }
 
 document.getElementById('nav').addEventListener('click', (e) => {
@@ -549,7 +554,28 @@ let recordTimer = null;
 let recordStartTime = 0;
 let isSpeaking = false;
 
+function fillVoiceReview(parsed) {
+  const form = $('#report-form');
+  form.elements.name.value = parsed.name === 'Unknown Location' ? '' : parsed.name || '';
+  form.elements.location.value = parsed.location === 'Unknown Location' ? '' : parsed.location || '';
+  form.elements.population_affected.value = parsed.population_affected || 0;
+  form.elements.rescue_needed.checked = Boolean(parsed.rescue_needed);
+  form.elements.urgency_high.checked = Boolean(parsed.urgency_high);
+  chosen.clear();
+  for (const need of parsed.needs || []) chosen.add(need);
+  document.querySelectorAll('#need-chips .chip').forEach(chip => {
+    const selected = chosen.has(chip.dataset.c);
+    chip.classList.toggle('on', selected);
+    chip.setAttribute('aria-pressed', String(selected));
+  });
+  showReportStep(0);
+  $('#report-result').textContent = 'Voice draft ready. Check the incident details and proceed to Confirm Report. Nothing has been submitted.';
+}
+let voiceAnalysisVersion = 0;
+let voiceReadyChecked = false;
 async function processVoiceDispatch(payload) {
+  const version = ++voiceAnalysisVersion;
+  $('#voice-status').textContent = 'Analysing audio. This can take a few seconds…';
   const hud = $('#acoustic-hud');
   if (hud) hud.classList.remove('hidden');
   $('#hud-distress').textContent = 'Analyzing...';
@@ -564,6 +590,7 @@ async function processVoiceDispatch(payload) {
       method: 'POST',
       body: JSON.stringify(payload)
     });
+    if (version !== voiceAnalysisVersion) return;
 
     const ac = res.acoustic;
     $('#hud-distress').textContent = `${ac.distress_score} / 100 (${ac.urgency_level})`;
@@ -584,27 +611,45 @@ async function processVoiceDispatch(payload) {
     }
 
     $('#hud-triage-summary').innerHTML = `
-      <b>AI Triage:</b> "${esc(res.transcript)}" ➔ <b>${esc(res.parsed.name)}</b> (${esc(res.parsed.location)})
-      ${res.parsed.rescue_needed ? ' ·  <b>Trapped Survivors Flagged</b>' : ''}
-      ${res.parsed.urgency_high ? ' ·  <b>Urgency Multiplier (×1.2) Applied</b>' : ''}
+      <b>Review voice report</b>
+      <p>${res.transcript_missing ? 'No transcript is available. Type what you heard or enter the incident details in the form.' : 'Check the transcript and incident details before confirming the report.'}</p>
+      <label>Transcript<textarea id="voice-transcript" rows="4" style="width:100%;font:inherit;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:10px;">${esc(res.transcript)}</textarea></label>
+      <button type="button" id="voice-apply-transcript" class="secondary">Use edited transcript</button>
+      <p class="dim">Acoustic urgency is a suggestion. Verify rescue and urgency flags in the form.</p>
     `;
+    fillVoiceReview(res.parsed);
+    $('#voice-status').textContent = 'Analysis complete. Review the draft before confirming.';
+    $('#voice-apply-transcript').onclick = async () => {
+      const text = $('#voice-transcript').value.trim();
+      if (!text) { $('#report-result').textContent = 'Enter a transcript or complete the incident form manually.'; return; }
+      try {
+        const draft = await api('/api/reports/natural', { method: 'POST', body: JSON.stringify({ text }) });
+        fillVoiceReview(draft.parsed);
+      } catch (error) { reportError(error); }
+    };
 
     appendChat('user', ` [Radio Dispatch]: "${res.transcript}"`);
     appendChat('system', ` Voice distress estimate: ${ac.distress_score}/100 (${ac.urgency_level}) with ${(ac.confidence * 100).toFixed(0)}% confidence.\nExtracted: ${res.parsed.name} | Needs: ${res.parsed.needs.join(', ')} | Rescue Override: ${res.parsed.rescue_needed ? 'YES' : 'no'}`);
     
-    if (res.report_result) {
-      appendChat('system', ` Priority Zone Created: ${res.report_result.zone_id} placed at tier ${res.report_result.status}.`);
-    }
-
-    renderDashboard();
     return res;
   } catch (err) {
-    $('#hud-distress').textContent = 'Error: ' + err.message;
-    appendChat('system', ` Voice dispatch error: ${err.message}`);
+    if (version !== voiceAnalysisVersion) return;
+    $('#voice-status').textContent = 'Audio analysis failed. Retry, or enter the incident details manually.';
+    $('#hud-distress').textContent = 'Analysis unavailable';
+    $('#hud-triage-summary').textContent = 'No incident was submitted. You can still use the incident form.';
   }
 }
 
 function setupVoiceDispatcher() {
+  if (!voiceReadyChecked) {
+    voiceReadyChecked = true;
+    $('#voice-status').textContent = 'Checking audio service…';
+    api('/api/voice-ready').then(result => {
+      if (!voiceAnalysisVersion) $('#voice-status').textContent = result.ready
+        ? 'Voice analysis ready. Microphone access requires browser permission.'
+        : 'Voice analysis unavailable. Use the incident form or check the audio setup.';
+    }).catch(() => { if (!voiceAnalysisVersion) $('#voice-status').textContent = 'Cannot reach audio service. Use the form or reload to retry.'; });
+  }
   const btnRec = $('#btn-record-mic');
   const fileInput = $('#audio-file-input');
   const sampleBtns = document.querySelectorAll('.btn-sample');
@@ -880,12 +925,7 @@ window.runVoiceDemo = async () => {
   const modal = $('#demo-modal');
   if (modal) modal.classList.add('hidden');
   show('report');
-  const res = await processVoiceDispatch({ sample_name: 'critical_mayday.wav' });
-  if (res) {
-    setTimeout(() => {
-      show('dashboard');
-    }, 2000);
-  }
+  await processVoiceDispatch({ sample_name: 'critical_mayday.wav' });
 };
 
 async function renderInventory() {
@@ -1027,20 +1067,24 @@ async function updateSimStatus() {
     } else {
       $('#sim-start').disabled = false;
       $('#sim-stop').disabled = true;
-      $('#sim-status').innerHTML = status.scenario_name ? `<div class="banner">Simulation complete: ${esc(status.scenario_name)}</div>` : '';
+      const label = status.status === 'stopped' ? 'Simulation stopped' : status.status === 'failed' ? 'Simulation finished with errors' : 'Simulation complete';
+      $('#sim-status').innerHTML = status.scenario_name ? `<div class="banner">${label}: ${esc(status.scenario_name)} · ${status.events_completed}/${status.total_events} events</div>` : '<p class="dim">Ready. Choose a scenario and launch when you are ready.</p>';
     }
   } catch(e) { console.error(e); }
 }
 
 $('#sim-start').onclick = async () => {
+  if (!confirm('Start a fresh simulation? This replaces the saved workspace with demo data.')) return;
   const scenario = $('#sim-scenario').value;
   const speed = parseInt(document.querySelector('.speed-btn.active')?.dataset.speed || '5');
   try {
+    $('#sim-start').disabled = true;
+    $('#sim-status').textContent = 'Starting simulation…';
     await api('/api/simulate/start', { method: 'POST', body: JSON.stringify({ scenario, speed }) });
     $('#sim-log').innerHTML = '';
     appendSimLog({ type: 'simulation_started', payload: { scenario } });
     await updateSimStatus();
-  } catch(e) { alert(e.message); }
+  } catch(e) { $('#sim-start').disabled = false; $('#sim-status').textContent = 'Could not start simulation. Retry when the server is available.'; }
 };
 
 $('#sim-stop').onclick = async () => {
@@ -1172,7 +1216,7 @@ window.saveStock = async resourceId => {
 };
 
 function reportError(error) {
-  if ($('#connection-status')) $('#connection-status').textContent = error.message || 'Connection unavailable';
+  if ($('#app-status')) $('#app-status').textContent = error.message ? `${error.message}. Retry the action when ready.` : 'Connection unavailable. Check the server and retry.';
 }
 window.addEventListener('unhandledrejection', e => {
   reportError(e.reason);

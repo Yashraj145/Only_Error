@@ -1,5 +1,30 @@
 # Sanjeevani end-to-end test report
 
+## Final demo-readiness verification — 12 September 2026
+
+- Final automated regression suite: **37 passed, 0 failed** (`npm test`). JavaScript syntax and whitespace checks passed.
+- Latest isolated server: http://localhost:3300, using `data/rehearsal.json`. The earlier port 3200 workspace remains separate.
+- Recorded browser rehearsal: reported Ward 9, reviewed and confirmed it, accepted a diversion of 12 medical kits, confirmed delivery, verified zero remaining medical stock, and inspected the zone audit history and situation report. No uncaught page errors were observed during the rehearsal.
+- Status checks verified voice readiness, manual simulation stop (`1/6 events`), natural completion (`6/6 events`), and retry guidance for a simulated resource-loading error.
+- Backup artifact: `Sanjeevani-backup-demo.webm`, approximately 60 seconds, silent, 1440 × 1000. Supplied separately from the repository.
+- This adds targeted browser checks to the complete automated suite; it does not claim a new physical-device, real-microphone, production-load or security audit.
+
+The latest changes preserve the existing page structure. See DEMO.md for the rehearsal narrative and reset precautions.
+
+## Persistence and voice review verification — 12 September 2026
+
+Latest suite: **37 passed, 0 failed**. Added tests cover complete snapshot restoration, request-ID recovery, explicit reset persistence, refusal to overwrite corrupt snapshots, voice previews without state mutations, and missing transcripts without invented locations.
+
+Browser verification on the new server at port 3200:
+
+- Voice sample analysis did not change the zone count.
+- Editing the transcript populated the existing incident form. Only Confirm Report created the incident with the reviewed location.
+- A real stop/start restored identical zone, inventory and audit API data, including the newly confirmed incident and its five audit entries.
+- Uploading audio without a transcript left transcript/location blank and displayed a manual-details prompt.
+- Mobile review layout had no horizontal overflow at 390 × 844; no uncaught page errors were observed.
+
+Local snapshots now persist history across restarts, superseding the earlier in-memory limitation below. Reset Demo and Launch Simulation still explicitly reset the workspace. Earlier running processes on ports 3000/3100 were not stopped or automatically migrated. The updated app runs at http://localhost:3200/ with `data/workspace.json`.
+
 ## Repair verification — 12 September 2026
 
 **Latest result: both reported defects repaired and verified on a fresh server at port 3100.** The original findings below are retained as historical evidence.
