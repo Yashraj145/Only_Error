@@ -11,6 +11,18 @@ npm test
 ```
 
 Open http://localhost:3000. Set PORT to choose a different port.
+For voice analysis, create a project virtual environment (Python 3.12 recommended) and install the audio dependencies:
+
+```sh
+python -m venv .venv
+# Windows:
+.venv/Scripts/python -m pip install -r requirements-audio.txt
+# macOS/Linux:
+.venv/bin/python -m pip install -r requirements-audio.txt
+```
+
+The server automatically uses `.venv`; set `SANJEEVANI_PYTHON` to override the interpreter path. The environment is local and excluded from Git. Run `npm test` after setup to verify voice ingestion.
+
 See [DEMO.md](DEMO.md) for exact report values, expected scores and the rehearsal sequence.
 
 ## Implemented workflow

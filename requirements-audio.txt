@@ -1,0 +1,7 @@
+# Install in the project .venv (Python 3.12 recommended).
+numpy==2.2.6
+librosa==0.11.0
+soundfile==0.13.1
+# Keep Librosa's compiled pitch interpolation on a tested Windows runtime.
+numba==0.61.2
+llvmlite==0.44.0

@@ -231,6 +231,7 @@ function connectSSE() {
           if (state.screen === 'dashboard') renderDashboard().catch(reportError);
           if (state.screen === 'sitrep') renderSitrep().catch(reportError);
           if (state.screen === 'audit') renderAudit().catch(reportError);
+          if (state.screen === 'simulation') updateSimStatus().catch(reportError);
         }, 120);
       }
     } catch(err) {
@@ -1207,5 +1208,6 @@ setInterval(() => {
   if (state.screen === 'dashboard') renderDashboard().catch(reportError);
   if (state.screen === 'inventory') renderInventory().catch(reportError);
   if (state.screen === 'audit') renderAudit().catch(reportError);
+  if (state.screen === 'simulation') updateSimStatus().catch(reportError);
   syncReports();
 }, 8000);

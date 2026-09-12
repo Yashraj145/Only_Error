@@ -53,6 +53,7 @@ test('voice agent: POST /api/voice-report ingests critical radio dispatch via Li
   assert.equal(res.status, 200);
   assert.equal(res.data.success, true);
   assert.ok(res.data.acoustic);
+  assert.equal(res.data.acoustic.engine, 'librosa');
   assert.equal(res.data.acoustic.mfcc.length, 13);
   assert.ok(res.data.acoustic.pitch_hz > 0);
   assert.ok(res.data.acoustic.energy_rms > 0);
@@ -61,4 +62,13 @@ test('voice agent: POST /api/voice-report ingests critical radio dispatch via Li
   assert.equal(res.data.parsed.rescue_needed, true);
   assert.equal(res.data.parsed.urgency_high, true);
   assert.ok(res.data.report_result);
+});
+
+test('voice agent: repeated analysis works with compiled audio cache', async () => {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await makeRequest('/api/voice-report', 'POST', { sample_name: 'critical_mayday.wav' });
+    assert.equal(res.status, 200, res.data.error);
+    assert.equal(res.data.acoustic.engine, 'librosa');
+    assert.equal(res.data.acoustic.mfcc.length, 13);
+  }
 });

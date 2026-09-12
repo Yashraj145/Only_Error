@@ -339,9 +339,12 @@ const SAMPLES = {
   }
 };
 
-function analyzeAudioWithPython(filePath) {
+async function analyzeAudioWithPython(filePath) {
+  const localPython = path.join(__dirname, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+  const python = process.env.SANJEEVANI_PYTHON || (await fs.access(localPython).then(() => localPython, () => 'python'));
   return new Promise((resolve, reject) => {
-    const py = spawn('python', ['ai/processing/audio_distress.py', filePath]);
+    const py = spawn(python, [path.join(__dirname, 'ai/processing/audio_distress.py'), filePath], { windowsHide: true });
+    py.on('error', error => reject(new Error(`Cannot start audio Python runtime: ${error.message}. Set up .venv with requirements-audio.txt.`)));
     let stdout = '';
     let stderr = '';
     py.stdout.on('data', (d) => { stdout += d.toString(); });
@@ -449,7 +452,7 @@ app.post('/api/simulate/start', (req, res) => {
   if (!scenario || !SCENARIOS[scenario]) return res.status(400).json({ error: 'valid scenario key required', available: Object.keys(SCENARIOS) });
   try {
     seedDemoData(); // reset to clean state
-    const result = startSimulation(scenario, speed || 1, broadcast);
+    const result = startSimulation(scenario, speed || 1, ({ type, ...payload }) => broadcast(type, payload));
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e.message });
