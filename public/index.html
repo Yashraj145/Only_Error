@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <title>Sanjeevani — Relief Resource Coordinator</title>
+  <title>Sanjeevani - Relief Resource Coordinator</title>
   <meta name="theme-color" content="#087f70">
   <meta name="description" content="Sanjeevani helps disaster response teams prioritise needs, coordinate agencies and track relief resources." />
   <link rel="icon" href="logo.svg" type="image/svg+xml" />
@@ -57,41 +57,48 @@
     <!-- DASHBOARD -->
     <section id="screen-dashboard" class="screen active">
       <div id="status-strip" class="strip"></div>
-      <div class="operations-grid"><div class="map-panel"><div class="section-heading"><div><h2>Incident map</h2><p class="dim">Illustrative locations · demo data</p></div><button id="btn-toggle-corridors" class="secondary" aria-pressed="true">Supply routes: on</button></div><div id="map-container"></div><div class="map-legend"><span class="critical">● Critical</span><span class="high">● High</span><span class="moderate">● Moderate</span><span class="low">● Low</span></div></div><div class="attention-panel"><p class="eyebrow">NEEDS ATTENTION</p><h2>Response priorities</h2>
+      <div class="operations-grid"><div class="map-panel"><div class="section-heading"><div><h2>Incident map</h2><p class="dim">Illustrative locations, demo data</p></div><button id="btn-toggle-corridors" class="secondary" aria-pressed="true">Supply routes: on</button></div><div id="map-container"></div><div class="map-legend"><span class="critical">● Critical</span><span class="high">● High</span><span class="moderate">● Moderate</span><span class="low">● Low</span></div></div><aside class="attention-panel" aria-labelledby="response-priorities-title"><p class="eyebrow">NEEDS ATTENTION</p><h2 id="response-priorities-title">Response priorities</h2>
       <div id="critical-needs"></div>
       <div id="forecast-alerts"></div>
       <div id="dup-banner"></div>
       <div id="proposal-card"></div>
-      </div></div>
+      </aside></div>
       
-      <h2>Priority-ranked zones</h2>
-      <div id="zone-list" class="cards"></div>
+      <section class="dashboard-section" aria-labelledby="priority-zones-title">
+        <div class="content-heading"><h2 id="priority-zones-title">Priority-ranked zones</h2><p class="dim">Review severity, unmet needs and agency coverage by location.</p></div>
+        <div id="zone-list" class="cards"></div>
+      </section>
       
-      <h2>Response agency coordination</h2>
-      <p class="dim">National, state and humanitarian response teams · illustrative agency assignments</p>
-      <div id="agency-coordination" class="cards"></div>
+      <section class="dashboard-section" aria-labelledby="agency-title">
+        <div class="content-heading"><h2 id="agency-title">Response agency coordination</h2><p class="dim">National, state and humanitarian response teams with illustrative assignments.</p></div>
+        <div id="agency-coordination" class="cards"></div>
+      </section>
 
-      <h2>Resource inventory <span id="depletion-indicators" class="dim"></span></h2>
-      <div id="inventory-summary" class="cards"></div>
+      <section class="dashboard-section" aria-labelledby="resource-summary-title">
+        <div class="content-heading"><h2 id="resource-summary-title">Resource inventory <span id="depletion-indicators" class="dim"></span></h2><p class="dim">Current available units across all participating agencies.</p></div>
+        <div id="inventory-summary" class="cards"></div>
+      </section>
       
-      <h2>Activity feed <button class="link" data-screen="audit">View all →</button></h2>
-      <ul id="activity-feed" class="feed"></ul>
+      <section class="dashboard-section" aria-labelledby="activity-title">
+        <div class="content-heading content-heading-row"><div><h2 id="activity-title">Activity feed</h2><p class="dim">Latest operational decisions and resource updates.</p></div><button class="link" data-screen="audit">View all →</button></div>
+        <ul id="activity-feed" class="feed"></ul>
+      </section>
       <div class="demo-footer"><span class="dim">Sample incidents and agency resources for demonstration.</span><button id="btn-demo-tour" class="secondary">Demo walkthrough</button><button id="reset-demo" class="secondary">Reset demo data</button></div>
     </section>
 
     <!-- REPORT (with NLP chat) -->
     <section id="screen-report" class="screen">
       <div class="report-layout">
-        <div>
-          <h2>Incident details</h2>
+        <section class="report-section" aria-labelledby="incident-details-title">
+          <div class="content-heading"><h2 id="incident-details-title">Incident details</h2><p class="dim">Complete the four checks before submitting the incident.</p></div>
           <form id="report-form">
-            <p id="report-step-label">Step 1 of 4 · Zone details</p>
+            <p id="report-step-label">Step 1 of 4: Zone details</p>
             <div data-report-step="0">
               <label>Zone name<input name="name" required placeholder="Ward 9" /></label>
               <label>Location / landmark<input name="location" required placeholder="Ward 9, West District" /></label>
               <label>Population affected<input name="population_affected" type="number" min="0" value="500" /></label>
-              <button id="use-location" type="button" class="secondary" style="margin-top:6px;">Use my location</button>
-              <p class="dim" style=" margin-top:4px;">You can also type a landmark or district manually.</p>
+              <button id="use-location" type="button" class="secondary location-button">Use my location</button>
+              <p class="dim field-help">You can also type a landmark or district manually.</p>
             </div>
             <div data-report-step="1" hidden>
               <fieldset><legend>Resource needs</legend>
@@ -103,77 +110,80 @@
               <label class="check"><input type="checkbox" name="urgency_high" /> Immediate assistance is needed</label>
             </div>
             <div data-report-step="3" id="report-review" hidden></div>
-            <div class="row" style="margin-top:12px;">
+            <div class="row form-actions">
               <button type="button" id="report-back" class="secondary" hidden>Back</button>
               <button type="button" id="report-next">Next</button>
               <button type="submit" id="report-submit" hidden>Confirm Report</button>
             </div>
             <div id="report-result"></div>
           </form>
-        </div>
-        <div>
-          <h2>Report by text or voice</h2>
+        </section>
+        <div class="report-tools">
+          <section class="report-section" aria-labelledby="voice-report-title">
+          <div class="content-heading"><h2 id="voice-report-title">Voice report</h2><p class="dim">Record, upload or test an audio dispatch.</p></div>
           
-          <div class="voice-panel" style=" padding:16px; margin-bottom:16px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
-              <b>Voice report</b>
-              <span class="dim">Record or upload an audio message.</span>
+          <div class="voice-panel">
+            <div class="panel-heading">
+              <div><b>Audio dispatch</b><span class="dim">Use a live recording or an existing call.</span></div>
             </div>
             <p id="voice-status" class="dim" role="status" aria-live="polite">Checking audio service…</p>
             
-            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; align-items:center;">
-              <button id="btn-record-mic" type="button" class="mic-btn" style=" padding:8px 16px; display:inline-flex; align-items:center; gap:8px;">
-                <span class="rec-dot" style="display:inline-block; width:10px; height:10px;"></span>
+            <div class="voice-actions">
+              <button id="btn-record-mic" type="button" class="mic-btn">
+                <span class="rec-dot"></span>
                 <span id="rec-label">Start recording</span>
               </button>
               
-              <label class="btn-file-upload" style="display:inline-flex; align-items:center; gap:6px; padding:8px 14px;">
+              <label class="btn-file-upload">
                  Upload Audio Call
                 <input id="audio-file-input" type="file" accept="audio/*" style="display:none;" />
               </label>
             </div>
             
-            <div style="margin-bottom:12px;">
-              <span style=" margin-bottom:6px; display:block;" class="dim"> Try a sample voice report:</span>
-              <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                <button type="button" class="secondary btn-sample" data-sample="critical_mayday.wav" style=" padding:5px 10px;"> Mayday: Ward 9 Flood</button>
-                <button type="button" class="secondary btn-sample" data-sample="urgent_earthquake.wav" style=" padding:5px 10px;"> Urgent: Sector 4 Collapse</button>
-                <button type="button" class="secondary btn-sample" data-sample="moderate_sitrep.wav" style=" padding:5px 10px;"> Routine: Ward 11 Sitrep</button>
+            <div class="sample-reports">
+              <span class="dim">Try a sample voice report</span>
+              <div class="sample-actions">
+                <button type="button" class="secondary btn-sample" data-sample="critical_mayday.wav">Mayday: Ward 9 Flood</button>
+                <button type="button" class="secondary btn-sample" data-sample="urgent_earthquake.wav">Urgent: Sector 4 Collapse</button>
+                <button type="button" class="secondary btn-sample" data-sample="moderate_sitrep.wav">Routine: Ward 11 Sitrep</button>
               </div>
             </div>
 
             <!-- Real-time Acoustic Feature HUD -->
-            <div id="acoustic-hud" class="acoustic-hud hidden" style=" padding:12px; margin-top:10px;">
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                <b > Voice analysis details</b>
+            <div id="acoustic-hud" class="acoustic-hud hidden">
+              <div class="analysis-heading">
+                <b>Voice analysis details</b>
                 <span id="hud-confidence" class="badge" >Confidence: --%</span>
               </div>
-              <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap:8px; margin-bottom:8px;">
-                <div class="hud-item" style=" padding:6px 8px;">
+              <div class="analysis-grid">
+                <div class="hud-item">
                   <span class="dim">Distress Index</span>
                   <div id="hud-distress" >-- / 100</div>
                 </div>
-                <div class="hud-item" style=" padding:6px 8px;">
+                <div class="hud-item">
                   <span class="dim">Pitch (F0)</span>
                   <div id="hud-pitch" >-- Hz</div>
                 </div>
-                <div class="hud-item" style=" padding:6px 8px;">
+                <div class="hud-item">
                   <span class="dim">RMS Energy</span>
                   <div id="hud-energy" >--</div>
                 </div>
-                <div class="hud-item" style=" padding:6px 8px;">
+                <div class="hud-item">
                   <span class="dim">Speech Rate</span>
                   <div id="hud-rate" >-- onsets/s</div>
                 </div>
               </div>
-              <div>
-                <span class="dim" style=" display:block; margin-bottom:4px;">MFCC Timbre Spectral Profile (13 Coefficients):</span>
-                <div id="hud-mfcc-bars" style="display:flex; height:24px; gap:3px; align-items:flex-end; padding:3px;"></div>
+              <div class="spectral-profile">
+                <span class="dim">MFCC timbre spectral profile (13 coefficients)</span>
+                <div id="hud-mfcc-bars"></div>
               </div>
-              <div id="hud-triage-summary" style="margin-top:8px;"></div>
+              <div id="hud-triage-summary"></div>
             </div>
           </div>
+          </section>
 
+          <section class="report-section" aria-labelledby="text-report-title">
+            <div class="content-heading"><h2 id="text-report-title">Text report</h2><p class="dim">Describe the situation in one message for assisted extraction.</p></div>
           <div class="chat-container">
             <div id="chat-messages" class="chat-messages">
               <div class="chat-msg system">Describe the location, people affected and help needed. Review the extracted details before submitting your text report.</div>
@@ -183,6 +193,7 @@
               <button id="chat-send">Send</button>
             </div>
           </div>
+          </section>
         </div>
       </div>
     </section>

@@ -5,7 +5,7 @@ const api = (path, opts) => fetch(path, { headers: { 'Content-Type': 'applicatio
   if (!r.ok) throw Object.assign(new Error(body.error || (body.existing_claim_agency ? 'Already claimed by ' + body.existing_claim_agency : r.statusText)), { status: r.status, body });
   return body;
 });
-const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const esc = (s) => String(s ?? '').replace(/[—–]/g, '-').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 const state = { screen: null };
 // Keep live-event bursts to one request batch at a time, with one trailing refresh.
@@ -299,15 +299,15 @@ async function loadDashboard() {
   }
 
   if (forecasts && forecasts.alerts && forecasts.alerts.length > 0) {
-    updateHTML('#forecast-alerts', forecasts.alerts.map(a => `<div class="banner"> <b>ALERT</b> — ${esc(a)}</div>`).join(''));
+    updateHTML('#forecast-alerts', forecasts.alerts.map(a => `<div class="banner"><b>Alert</b>: ${esc(a)}</div>`).join(''));
   } else {
     updateHTML('#forecast-alerts', '');
   }
 
   updateHTML('#dup-banner', flags.map((f) => `
     <div class="banner">
-      <b>Possible duplicate report</b> — "${esc(f.incoming.name)}" vs ${esc(f.matched_zone_name)}
-      <span class="dim">(match score ${f.score} ≥ 3: ${Object.entries(f.components).filter(([, v]) => v > 0).map(([k]) => k).join(', ') || '—'})</span>
+      <b>Possible duplicate report</b>: "${esc(f.incoming.name)}" vs ${esc(f.matched_zone_name)}
+      <span class="dim">(match score ${f.score} ≥ 3: ${Object.entries(f.components).filter(([, v]) => v > 0).map(([k]) => k).join(', ') || 'none'})</span>
       <div class="row">
         <button onclick="resolveFlag('${f.flag_id}','merge')">Merge into ${esc(f.matched_zone_name)}</button>
         <button class="secondary" onclick="resolveFlag('${f.flag_id}','dismiss')">Keep as new report</button>
@@ -316,7 +316,7 @@ async function loadDashboard() {
 
   updateHTML('#proposal-card', proposals.map((p) => `
     <div class="banner proposal">
-      <b>Re-allocation proposal</b> — Divert ${p.quantity} ${esc(p.category)} units ${esc(p.from_zone_name)} → ${esc(p.to_zone_name)}?
+      <b>Re-allocation proposal</b>: Divert ${p.quantity} ${esc(p.category)} units ${esc(p.from_zone_name)} → ${esc(p.to_zone_name)}?
       <div class="dim">${esc(p.reason_text)}</div>
       <div class="row">
         <button onclick="decideProposal('${p.allocation_id}','accept')">Accept</button>
@@ -327,7 +327,7 @@ async function loadDashboard() {
   updateHTML('#zone-list', zones.map((z) => `
     <div class="card t-${z.tier}">
       <h3>${esc(z.name)} ${tierBadge(z.tier)}</h3>
-      <div class="dim">Score ${z.severity_score} · pop ${z.population_affected} · needs: ${z.needs.join(', ') || '—'}${z.override_applied ? ' ·  rescue override' : ''}</div>
+      <div class="dim">Score ${z.severity_score} · pop ${z.population_affected} · needs: ${z.needs.join(', ') || 'none'}${z.override_applied ? ' · rescue override' : ''}</div>
       <div class="dim">Gaps: ${Object.entries(z.gaps).filter(([, g]) => g > 0).map(([c, g]) => `${c}: ${g}`).join(' · ') || 'none'}</div>
       ${z.tier === 'critical' && z.unclaimed_categories.length ? `<div class="row critical">Awaiting agency: ${z.unclaimed_categories.join(', ')}</div>` : ''}
       <div class="row"><button onclick="openZone('${z.zone_id}')">View needs & coordinate</button></div>
@@ -367,7 +367,7 @@ async function loadDashboard() {
   updateHTML('#activity-feed', d.audit_excerpt.map(feedRow).join('') || '<li class="dim">No activity yet.</li>');
 }
 
-const feedRow = (r) => `<li><details><summary><b>${esc(String(r.action_type || 'INCOMPLETE_RECORD').replace(/_/g, ' ').toLowerCase())}</b> · ${esc(readableAgency(r.description || 'This older record did not capture its action details.'))}</summary><span class="dim">${esc(readableAgency(r.actor || 'Actor not recorded'))} · ${r.timestamp ? new Date(r.timestamp).toLocaleString('en-IN') : 'Time not recorded'} · Zone ${esc(r.zone_id || '—')} · Resource ${esc(r.resource_id || '—')} · Allocation ${esc(r.allocation_id || '—')} · ${esc(r.log_id)}</span></details></li>`;
+const feedRow = (r) => `<li><details><summary><b>${esc(String(r.action_type || 'INCOMPLETE_RECORD').replace(/_/g, ' ').toLowerCase())}</b> · ${esc(readableAgency(r.description || 'This older record did not capture its action details.'))}</summary><span class="dim">${esc(readableAgency(r.actor || 'Actor not recorded'))} · ${r.timestamp ? new Date(r.timestamp).toLocaleString('en-IN') : 'Time not recorded'} · Zone ${esc(r.zone_id || 'none')} · Resource ${esc(r.resource_id || 'none')} · Allocation ${esc(r.allocation_id || 'none')} · ${esc(r.log_id)}</span></details></li>`;
 
 window.resolveFlag = async (id, action) => {
   await api(`/api/duplicate-flags/${id}/resolve`, { method: 'POST', body: JSON.stringify({ action }) });
@@ -404,7 +404,7 @@ window.openZone = async (zoneId) => {
     <h4>Agency commitments</h4>
     ${z.claims.map(c => `<div class="row">${esc(agencies.find(a => a.agency_id === c.agency_id)?.name)} · ${esc(c.category)} · ${c.quantity ?? 'outstanding need'} · ${esc(c.status)} · ${new Date(c.timestamp).toLocaleTimeString()} ${c.status === 'pending' ? `<button onclick="deliverClaim('${z.zone_id}','${c.category}','${c.agency_id}')">Confirm Delivery</button>` : ''}</div>`).join('') || '<p>No pending claims.</p>'}
     <h4>Allocation history</h4>
-    ${z.allocations.map((a) => `<div class="row dim">[${a.status}] ${a.quantity} ${a.category} — ${esc(a.reason_text)}${a.status === 'confirmed' ? ` <button onclick="deliverAlloc('${a.allocation_id}', '${z.zone_id}')">Confirm delivery (${a.quantity})</button>` : ''}</div>`).join('') || '<p class="dim">None yet.</p>'}
+    ${z.allocations.map((a) => `<div class="row dim">[${a.status}] ${a.quantity} ${a.category}: ${esc(a.reason_text)}${a.status === 'confirmed' ? ` <button onclick="deliverAlloc('${a.allocation_id}', '${z.zone_id}')">Confirm delivery (${a.quantity})</button>` : ''}</div>`).join('') || '<p class="dim">None yet.</p>'}
     
     <h4>Audit trail (this zone)</h4>
     <ul class="feed">${(await api(`/api/audit-log?zone=${zoneId}`)).slice(0, 10).map(feedRow).join('')}</ul>`;
@@ -462,7 +462,7 @@ function reportData() {
 function showReportStep(step) {
   reportStep = step;
   document.querySelectorAll('[data-report-step]').forEach(el => el.hidden = Number(el.dataset.reportStep) !== step);
-  $('#report-step-label').textContent = `Step ${step + 1} of 4 · ${['Zone details', 'Resource needs', 'Urgency', 'Review'][step]}`;
+  $('#report-step-label').textContent = `Step ${step + 1} of 4: ${['Zone details', 'Resource needs', 'Urgency', 'Review'][step]}`;
   $('#report-back').hidden = step === 0; $('#report-next').hidden = step === 3; $('#report-submit').hidden = step !== 3;
   if (step === 3) { const r = reportData(); $('#report-review').innerHTML = `<h3>${esc(r.name)}</h3><p>${esc(r.location)} · ${r.population_affected} people</p><p>Needs: ${r.needs.join(', ')}</p><p>Rescue: ${r.rescue_needed ? 'Yes' : 'No'} · Urgent: ${r.urgency_high ? 'Yes' : 'No'}</p>`; }
 }
@@ -539,7 +539,7 @@ window.submitParsedReport = async (btn) => {
   const report = JSON.parse(btn.dataset.report);
   try {
     const r = await api('/api/reports', { method: 'POST', body: JSON.stringify(report) });
-    appendChat('system', ` Report submitted! Zone: ${r.zone_id} — ${r.message}`);
+    appendChat('system', `Report submitted. Zone: ${r.zone_id} - ${r.message}`);
     btn.parentElement.remove();
   } catch (e) {
     appendChat('system', ' ' + e.message);
@@ -575,7 +575,7 @@ let voiceAnalysisVersion = 0;
 let voiceReadyChecked = false;
 async function processVoiceDispatch(payload) {
   const version = ++voiceAnalysisVersion;
-  $('#voice-status').textContent = 'Analysing audio. This can take a few seconds…';
+  $('#voice-status').textContent = 'Analysing audio. This can take a few seconds...';
   const hud = $('#acoustic-hud');
   if (hud) hud.classList.remove('hidden');
   $('#hud-distress').textContent = 'Analyzing...';
@@ -583,7 +583,7 @@ async function processVoiceDispatch(payload) {
   $('#hud-pitch').textContent = 'Extracting...';
   $('#hud-energy').textContent = 'Computing...';
   $('#hud-rate').textContent = 'Processing...';
-  $('#hud-triage-summary').textContent = 'Analysing voice report…';
+  $('#hud-triage-summary').textContent = 'Analysing voice report...';
 
   try {
     const res = await api('/api/voice-report', {
@@ -613,7 +613,7 @@ async function processVoiceDispatch(payload) {
     $('#hud-triage-summary').innerHTML = `
       <b>Review voice report</b>
       <p>${res.transcript_missing ? 'No transcript is available. Type what you heard or enter the incident details in the form.' : 'Check the transcript and incident details before confirming the report.'}</p>
-      <label>Transcript<textarea id="voice-transcript" rows="4" style="width:100%;font:inherit;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:10px;">${esc(res.transcript)}</textarea></label>
+      <label>Transcript<textarea id="voice-transcript" rows="4">${esc(res.transcript)}</textarea></label>
       <button type="button" id="voice-apply-transcript" class="secondary">Use edited transcript</button>
       <p class="dim">Acoustic urgency is a suggestion. Verify rescue and urgency flags in the form.</p>
     `;
@@ -980,13 +980,13 @@ async function loadSitrep() {
         
         <h4> Zone Status</h4>
         <div class="cards">
-          ${s.zone_status.map(z => `<div class="card t-${z.tier}"><h3>${esc(z.name)} <span class="badge ${z.tier}">${z.tier}</span></h3><div class="dim">Score: ${z.severity_score} · Trend: ${z.trend || '—'} · Top gaps: ${(z.top_gaps||[]).join(', ') || 'none'}</div></div>`).join('')}
+          ${s.zone_status.map(z => `<div class="card t-${z.tier}"><h3>${esc(z.name)} <span class="badge ${z.tier}">${z.tier}</span></h3><div class="dim">Score: ${z.severity_score} · Trend: ${z.trend || 'none'} · Top gaps: ${(z.top_gaps||[]).join(', ') || 'none'}</div></div>`).join('')}
         </div>
         
         <h4> Resource Status</h4>
         <table style="margin-bottom:16px;">
           <tr><th>Category</th><th>Available</th><th>Burn Rate</th><th>Depletion ETA</th><th>Status</th></tr>
-          ${s.resource_status.map(r => `<tr><td>${r.category}</td><td>${r.available}</td><td>${r.burn_rate?.toFixed(1) || '0'}/hr</td><td>${r.hours_to_depletion != null ? (r.hours_to_depletion === Infinity ? '∞' : r.hours_to_depletion.toFixed(1) + 'h') : '—'}</td><td><span class="badge ${r.status}">${r.status}</span></td></tr>`).join('')}
+          ${s.resource_status.map(r => `<tr><td>${r.category}</td><td>${r.available}</td><td>${r.burn_rate?.toFixed(1) || '0'}/hr</td><td>${r.hours_to_depletion != null ? (r.hours_to_depletion === Infinity ? '∞' : r.hours_to_depletion.toFixed(1) + 'h') : 'none'}</td><td><span class="badge ${r.status}">${r.status}</span></td></tr>`).join('')}
         </table>
         
         <h4> Recommendations</h4>
@@ -1052,7 +1052,7 @@ ${(s.recent_actions || []).map(a => `- **${a.action_type}** (${readableAgency(a.
 async function renderSimulation() {
   try {
     const scenarios = await api('/api/simulate/scenarios');
-    $('#sim-scenario').innerHTML = scenarios.map(s => `<option value="${s.key}">${esc(s.name)} — ${esc(s.description)} (${s.event_count} events)</option>`).join('');
+    $('#sim-scenario').innerHTML = scenarios.map(s => `<option value="${s.key}">${esc(s.name)}: ${esc(s.description)} (${s.event_count} events)</option>`).join('');
   } catch(e) { console.error(e); }
   await updateSimStatus();
 }
@@ -1063,7 +1063,7 @@ async function updateSimStatus() {
     if (status.running) {
       $('#sim-start').disabled = true;
       $('#sim-stop').disabled = false;
-      $('#sim-status').innerHTML = `<div class="banner proposal"> LIVE — ${esc(status.scenario_name)} · ${status.events_completed}/${status.total_events} events · Speed ${status.speed}×</div>`;
+      $('#sim-status').innerHTML = `<div class="banner proposal">Live: ${esc(status.scenario_name)} · ${status.events_completed}/${status.total_events} events · Speed ${status.speed}×</div>`;
     } else {
       $('#sim-start').disabled = false;
       $('#sim-stop').disabled = true;
@@ -1101,7 +1101,7 @@ document.querySelectorAll('.speed-btn').forEach(btn => {
 
 function appendSimLog(event) {
   const li = document.createElement('li');
-  li.innerHTML = `<b>${event.type}</b> — ${JSON.stringify(event.payload || {}).slice(0, 120)} <span class="dim">${new Date().toLocaleTimeString()}</span>`;
+  li.innerHTML = `<b>${event.type}</b>: ${JSON.stringify(event.payload || {}).slice(0, 120)} <span class="dim">${new Date().toLocaleTimeString()}</span>`;
   $('#sim-log').prepend(li);
 }
 
