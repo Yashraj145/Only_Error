@@ -10,7 +10,16 @@ npm start
 npm test
 ```
 
-Open http://localhost:3000. Set PORT to choose a different port.
+The current local development server is available at [http://localhost:3300](http://localhost:3300).
+
+To run the project on that port in PowerShell:
+
+```powershell
+$env:PORT = "3300"
+npm start
+```
+
+Without a `PORT` override, the server uses [http://localhost:3000](http://localhost:3000).
 For voice analysis, create a project virtual environment (Python 3.12 recommended) and install the audio dependencies:
 
 ```sh
